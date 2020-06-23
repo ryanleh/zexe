@@ -3,7 +3,6 @@ use crate::{
 };
 use algebra_core::Field;
 use core::cell::{Ref, RefCell, RefMut};
-use core::ops::Deref;
 
 /// Computations are expressed in terms of rank-1 constraint systems (R1CS).
 /// The `generate_constraints` method is called to generate constraints for
@@ -80,7 +79,7 @@ impl<F: Field> ConstraintSystem<F> {
             .collect()
     }
 
-    /// Construct an ampty `StandardConstraintSystem`.
+    /// Construct an ampty `ConstraintSystem`.
     pub fn new() -> Self {
         Self {
             num_instance_variables: 1,
@@ -228,7 +227,9 @@ impl<F: Field> ConstraintSystem<F> {
     /// Naively inlines symbolic linear combinations into the linear combinations
     /// that use them.
     ///
-    /// Useful for standard pairing-based SNARKs where addition gates are free.
+    /// Useful for standard pairing-based SNARKs where addition gates are free,
+    /// such as the SNARKs in [[Groth16]](https://eprint.iacr.org/2016/260) and
+    /// [[Groth-Maller17]](https://eprint.iacr.org/2017/540).
     pub fn inline_all_lcs(&mut self) {
         let mut inlined_lcs = BTreeMap::new();
         for (&index, lc) in &self.lc_map {
@@ -290,7 +291,7 @@ impl<F: Field> ConstraintSystem<F> {
             let a_num_non_zero: usize = a.iter().map(|lc| lc.len()).sum();
             let b_num_non_zero: usize = b.iter().map(|lc| lc.len()).sum();
             let c_num_non_zero: usize = c.iter().map(|lc| lc.len()).sum();
-            Some(ConstraintMatrices {
+            let matrices = ConstraintMatrices {
                 num_instance_variables: self.num_instance_variables,
                 num_witness_variables: self.num_witness_variables,
                 num_constraints: self.num_constraints,
@@ -302,7 +303,8 @@ impl<F: Field> ConstraintSystem<F> {
                 a,
                 b,
                 c,
-            })
+            };
+            Some(matrices)
         } else {
             None
         }
@@ -323,13 +325,13 @@ pub struct ConstraintMatrices<F: Field> {
     /// The number of non_zero entries in the C matrix.
     pub c_num_non_zero: usize,
 
-    /// The A constraint matrix. This is `None` when
+    /// The A constraint matrix. This is empty when
     /// `self.mode == Mode::Prove { construct_matrices = false }`.
     pub a: Matrix<F>,
-    /// The B constraint matrix. This is `None` when
+    /// The B constraint matrix. This is empty when
     /// `self.mode == Mode::Prove { construct_matrices = false }`.
     pub b: Matrix<F>,
-    /// The C constraint matrix. This is `None` when
+    /// The C constraint matrix. This is empty when
     /// `self.mode == Mode::Prove { construct_matrices = false }`.
     pub c: Matrix<F>,
 }
@@ -368,23 +370,21 @@ impl<F: Field> ConstraintSystemRef<F> {
         self.inner.borrow_mut()
     }
 
-    /// Obtain a raw mutable reference to the underlying `ConstraintSystem`.
-    #[inline]
-    pub fn as_ptr(&self) -> *mut ConstraintSystem<F> {
-        self.inner.as_ptr()
-    }
-}
-
-impl<'a, F: Field> Deref for ConstraintSystemRef<F> {
-    type Target = ConstraintSystem<F>;
-
-    /// Obtain an immutable reference to the underlying `ConstraintSystem`.
+    /// Obtain a mutable reference to the underlying `ConstraintSystem`.
     ///
     /// # Panics
     /// This method panics if `self` is already mutably borrowed.
     #[inline]
-    #[allow(unsafe_code)]
-    fn deref(&self) -> &ConstraintSystem<F> {
-        unsafe { self.as_ptr().as_ref().unwrap() }
+    pub fn ns(&self, name: String) -> Self {
+        let new_ns = self.clone();
+        new_ns.borrow_mut().enter_namespace(name);
+        new_ns
+    }
+}
+
+impl<F: Field> Drop for ConstraintSystemRef<F> {
+    fn drop(&mut self) {
+        self.borrow_mut().leave_namespace();
+        drop(&mut self.inner)
     }
 }

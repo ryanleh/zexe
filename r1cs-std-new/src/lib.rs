@@ -33,67 +33,73 @@ use ralloc::{collections::BTreeMap, string::String, vec::Vec};
 #[cfg(feature = "std")]
 use std::{collections::BTreeMap, string::String, vec::Vec};
 
-// pub mod test_constraint_counter;
-// pub mod test_constraint_system;
+pub mod test_constraint_counter;
+pub mod test_constraint_system;
 
-// pub mod bits;
-// pub use self::bits::*;
+pub mod bits;
+pub use self::bits::*;
 
 pub mod fields;
 
-// pub mod groups;
+pub mod groups;
 
-// mod instantiated;
+mod instantiated;
 
-// #[cfg(feature = "bls12_377")]
-// pub use instantiated::bls12_377;
+#[cfg(feature = "bls12_377")]
+pub use instantiated::bls12_377;
 
-// #[cfg(feature = "edwards_bls12")]
-// pub use instantiated::edwards_bls12;
+#[cfg(feature = "ed_on_bls12_377")]
+pub use instantiated::ed_on_bls12_377;
 
-// #[cfg(feature = "edwards_sw6")]
-// pub use instantiated::edwards_sw6;
+#[cfg(feature = "ed_on_mnt4_298")]
+pub use instantiated::ed_on_mnt4_298;
 
-// #[cfg(feature = "jubjub")]
-// pub use instantiated::jubjub;
+#[cfg(feature = "ed_on_mnt4_753")]
+pub use instantiated::ed_on_mnt4_753;
 
-// #[cfg(feature = "mnt4_298")]
-// pub use instantiated::mnt4_298;
+#[cfg(feature = "ed_on_cp6_782")]
+pub use instantiated::ed_on_cp6_782;
 
-// #[cfg(feature = "mnt4_753")]
-// pub use instantiated::mnt4_753;
+#[cfg(feature = "ed_on_bls12_381")]
+pub use instantiated::ed_on_bls12_381;
 
-// #[cfg(feature = "mnt6_298")]
-// pub use instantiated::mnt6_298;
+#[cfg(feature = "mnt4_298")]
+pub use instantiated::mnt4_298;
 
-// #[cfg(feature = "mnt6_753")]
-// pub use instantiated::mnt6_753;
+#[cfg(feature = "mnt4_753")]
+pub use instantiated::mnt4_753;
 
-// pub mod pairing;
+#[cfg(feature = "mnt6_298")]
+pub use instantiated::mnt6_298;
 
-// pub mod alloc;
-// pub mod eq;
-// pub mod select;
+#[cfg(feature = "mnt6_753")]
+pub use instantiated::mnt6_753;
 
-// pub mod prelude {
-//     pub use crate::{
-//         alloc::*,
-//         bits::{boolean::Boolean, uint32::UInt32, uint8::UInt8, ToBitsGadget, ToBytesGadget},
-//         eq::*,
-//         fields::FieldGadget,
-//         groups::GroupGadget,
-//         instantiated::*,
-//         pairing::PairingGadget,
-//         select::*,
-//     };
-// }
+pub mod pairing;
 
-// pub trait Assignment<T> {
-//     fn get(self) -> Result<T, r1cs_core::SynthesisError>;
-// }
+pub mod alloc;
+pub mod eq;
+pub mod select;
 
-// impl<T> Assignment<T> for Option<T> {
-//     fn get(self) -> Result<T, r1cs_core::SynthesisError> {
-//         self.ok_or_else(|| r1cs_core::SynthesisError::AssignmentMissing)
-//     }
-// }
+pub mod prelude {
+    pub use crate::{
+        alloc::*,
+        bits::{boolean::Boolean, uint32::UInt32, uint8::UInt8, ToBitsGadget, ToBytesGadget},
+        eq::*,
+        fields::FieldGadget,
+        groups::GroupGadget,
+        instantiated::*,
+        pairing::PairingGadget,
+        select::*,
+    };
+}
+
+pub trait Assignment<T> {
+    fn get(self) -> Result<T, r1cs_core::SynthesisError>;
+}
+
+impl<T> Assignment<T> for Option<T> {
+    fn get(self) -> Result<T, r1cs_core::SynthesisError> {
+        self.ok_or_else(|| r1cs_core::SynthesisError::AssignmentMissing)
+    }
+}

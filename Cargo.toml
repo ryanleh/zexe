@@ -14,7 +14,6 @@ members = [
     "groth16",
     "r1cs-core",
     "r1cs-core-new",
-    "r1cs-std",
     "r1cs-std-new",
     "algebra-core/algebra-core-derive",
 ]

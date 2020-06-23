@@ -2,22 +2,28 @@ use algebra::{BitIterator, Field, PrimeField};
 
 use crate::{prelude::*, Assignment, Vec};
 use core::borrow::Borrow;
-use core::ops::
-use r1cs_core::{ConstraintSystemRef, SynthesisError, Variable};
+use r1cs_core::{ConstraintSystem, ConstraintVar, LinearCombination, SynthesisError, Variable};
 
 /// Represents a variable in the constraint system which is guaranteed
 /// to be either zero or one.
-#[derive(Clone, Debug)]
-pub struct AllocatedBit<ConstraintF: Field> {
+#[derive(Copy, Clone, Debug)]
+pub struct AllocatedBit {
     variable: Variable,
     value: Option<bool>,
-    cs: ConstraintSystemRef<F>,
 }
 
 impl AllocatedBit {
+    pub fn get_value(&self) -> Option<bool> {
+        self.value
+    }
+
+    pub fn get_variable(&self) -> Variable {
+        self.variable
+    }
+
     /// Performs an XOR operation over the two operands, returning
     /// an `AllocatedBit`.
-    pub fn xor(a: &Self, b: &Self) -> Result<Self, SynthesisError>
+    pub fn xor<ConstraintF, CS>(mut cs: CS, a: &Self, b: &Self) -> Result<Self, SynthesisError>
     where
         ConstraintF: Field,
         CS: ConstraintSystem<ConstraintF>,
@@ -220,8 +226,6 @@ impl AllocatedBit {
     }
 }
 
-
-
 impl PartialEq for AllocatedBit {
     fn eq(&self, other: &Self) -> bool {
         self.value.is_some() && other.value.is_some() && self.value == other.value
@@ -231,6 +235,16 @@ impl PartialEq for AllocatedBit {
 impl Eq for AllocatedBit {}
 
 impl<ConstraintF: Field> AllocGadget<bool, ConstraintF> for AllocatedBit {
+    fn alloc_constant<T, CS: ConstraintSystem<ConstraintF>>(
+        _cs: CS,
+        _t: T,
+    ) -> Result<Self, SynthesisError>
+    where
+        T: Borrow<bool>,
+    {
+        unimplemented!();
+    }
+
     fn alloc<F, T, CS: ConstraintSystem<ConstraintF>>(
         mut cs: CS,
         value_gen: F,
@@ -535,6 +549,22 @@ impl Boolean {
         Ok(cur)
     }
 
+    pub fn kary_or<ConstraintF, CS>(mut cs: CS, bits: &[Self]) -> Result<Self, SynthesisError>
+    where
+        ConstraintF: Field,
+        CS: ConstraintSystem<ConstraintF>,
+    {
+        assert!(!bits.is_empty());
+        let mut bits = bits.iter();
+
+        let mut cur: Self = *bits.next().unwrap();
+        for (i, next) in bits.enumerate() {
+            cur = Boolean::or(cs.ns(|| format!("OR {}", i)), &cur, next)?;
+        }
+
+        Ok(cur)
+    }
+
     /// Asserts that at least one operand is false.
     pub fn enforce_nand<ConstraintF, CS>(mut cs: CS, bits: &[Self]) -> Result<(), SynthesisError>
     where
@@ -711,6 +741,16 @@ impl From<AllocatedBit> for Boolean {
 }
 
 impl<ConstraintF: Field> AllocGadget<bool, ConstraintF> for Boolean {
+    fn alloc_constant<T, CS: ConstraintSystem<ConstraintF>>(
+        _cs: CS,
+        t: T,
+    ) -> Result<Self, SynthesisError>
+    where
+        T: Borrow<bool>,
+    {
+        Ok(Boolean::constant(*t.borrow()))
+    }
+
     fn alloc<F, T, CS: ConstraintSystem<ConstraintF>>(
         cs: CS,
         value_gen: F,
@@ -1945,35 +1985,6 @@ mod test {
 
             assert!(cs.is_satisfied());
         }
-
-        // for _ in 0..1000 {
-        //     // Sample a random element not in the field
-        //     let r = loop {
-        //         let mut a = Fr::rand(&mut rng).into_repr();
-        //         let b = Fr::rand(&mut rng).into_repr();
-
-        //         a.add_nocarry(&b);
-        //         // we're shaving off the high bit_gadget later
-        //         a.as_mut()[3] &= 0x7fffffffffffffff;
-        //         if Fr::from_repr(a).is_err() {
-        //             break a;
-        //         }
-        //     };
-
-        //     let mut cs = TestConstraintSystem::<Fr>::new();
-
-        //     let mut bits = vec![];
-        //     for (i, b) in BitIterator::new(r).skip(1).enumerate() {
-        //         bits.push(Boolean::from(
-        //             AllocatedBit::alloc(cs.ns(|| format!("bit_gadget {}",
-        // i)), Some(b))                 .unwrap(),
-        //         ));
-        //     }
-
-        //     Boolean::enforce_in_field::<_, _, Fr>(&mut cs, &bits).unwrap();
-
-        //     assert!(!cs.is_satisfied());
-        // }
     }
 
     #[test]

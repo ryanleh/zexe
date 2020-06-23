@@ -5,109 +5,247 @@ use r1cs_core::{ConstraintSystem, SynthesisError};
 use crate::{prelude::*, Assignment};
 
 pub mod fp;
-// pub mod fp12;
-// pub mod fp2;
-// pub mod fp3;
-// pub mod fp4;
-// pub mod fp6_2over3;
-// pub mod fp6_3over2;
+pub mod fp12;
+pub mod fp2;
+pub mod fp3;
+pub mod fp4;
+pub mod fp6_2over3;
+pub mod fp6_3over2;
 
 pub trait FieldGadget<F: Field, ConstraintF: Field>:
     Sized
     + Clone
-    // + EqGadget<ConstraintF>
-    // + NEqGadget<ConstraintF>
-    // + ConditionalEqGadget<ConstraintF>
-    // + ToBitsGadget<ConstraintF>
-    // + AllocGadget<F, ConstraintF>
-    // + ToBytesGadget<ConstraintF>
-    // + CondSelectGadget<ConstraintF>
-    // + TwoBitLookupGadget<ConstraintF, TableConstant = F>
-    // + ThreeBitCondNegLookupGadget<ConstraintF, TableConstant = F>
-    + std::ops::Neg<Output = Self>
-    + for<'a> std::ops::Add<&'a Self, Output = Self>
-    + for<'a> std::ops::Sub<&'a Self, Output = Self>
-    + for<'a> std::ops::Mul<&'a Self, Output = Self>
-    + for<'a> std::ops::AddAssign<&'a Self>
-    + for<'a> std::ops::SubAssign<&'a Self>
-    + for<'a> std::ops::MulAssign<&'a Self>
-    + for<'a> std::ops::Add<F, Output = Self>
-    + for<'a> std::ops::Sub<F, Output = Self>
-    + for<'a> std::ops::Mul<F, Output = Self>
-    + for<'a> std::ops::AddAssign<F>
-    + for<'a> std::ops::SubAssign<F>
-    + for<'a> std::ops::MulAssign<F>
+    + EqGadget<ConstraintF>
+    + NEqGadget<ConstraintF>
+    + ConditionalEqGadget<ConstraintF>
+    + ToBitsGadget<ConstraintF>
+    + AllocGadget<F, ConstraintF>
+    + ToBytesGadget<ConstraintF>
+    + CondSelectGadget<ConstraintF>
+    + TwoBitLookupGadget<ConstraintF, TableConstant = F>
+    + ThreeBitCondNegLookupGadget<ConstraintF, TableConstant = F>
     + Debug
 {
+    type Variable: Clone + Debug;
+
+    fn get_value(&self) -> Option<F>;
+
+    fn get_variable(&self) -> Self::Variable;
+
     fn zero<CS: ConstraintSystem<ConstraintF>>(_: CS) -> Result<Self, SynthesisError>;
 
     fn one<CS: ConstraintSystem<ConstraintF>>(_: CS) -> Result<Self, SynthesisError>;
 
-    // fn conditionally_add_constant(
-    //     &self,
-    //     _: &Boolean,
-    //     _: F,
-    // ) -> Result<Self, SynthesisError>;
+    fn conditionally_add_constant<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        _: CS,
+        _: &Boolean,
+        _: F,
+    ) -> Result<Self, SynthesisError>;
 
-    /// Output `2 * self`.
-    fn double(&self) -> Result<Self, SynthesisError> {
-        let mut result = self.clone();
-        result.double_in_place();
-        Ok(result)
-    }
+    fn add<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        _: CS,
+        _: &Self,
+    ) -> Result<Self, SynthesisError>;
 
-    /// Replace `self` with `2 * self`.
-    fn double_in_place(&mut self) -> Result<&mut Self, SynthesisError> {
-        *self += &*self;
+    fn add_in_place<CS: ConstraintSystem<ConstraintF>>(
+        &mut self,
+        cs: CS,
+        other: &Self,
+    ) -> Result<&mut Self, SynthesisError> {
+        *self = self.add(cs, other)?;
         Ok(self)
     }
 
-    /// Replace `self` with `-self`.
+    fn double<CS: ConstraintSystem<ConstraintF>>(&self, cs: CS) -> Result<Self, SynthesisError> {
+        self.add(cs, &self)
+    }
+
+    fn double_in_place<CS: ConstraintSystem<ConstraintF>>(
+        &mut self,
+        cs: CS,
+    ) -> Result<&mut Self, SynthesisError> {
+        *self = self.double(cs)?;
+        Ok(self)
+    }
+
+    fn sub<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        _: CS,
+        _: &Self,
+    ) -> Result<Self, SynthesisError>;
+
+    fn sub_in_place<CS: ConstraintSystem<ConstraintF>>(
+        &mut self,
+        cs: CS,
+        other: &Self,
+    ) -> Result<&mut Self, SynthesisError> {
+        *self = self.sub(cs, other)?;
+        Ok(self)
+    }
+
+    fn negate<CS: ConstraintSystem<ConstraintF>>(&self, _: CS) -> Result<Self, SynthesisError>;
+
     #[inline]
-    fn negate_in_place(&mut self) -> Result<&mut Self, SynthesisError> {
-        *self = -self.clone();
+    fn negate_in_place<CS: ConstraintSystem<ConstraintF>>(
+        &mut self,
+        cs: CS,
+    ) -> Result<&mut Self, SynthesisError> {
+        *self = self.negate(cs)?;
         Ok(self)
     }
 
-    /// Output `self^2`.
-    fn square(&self, cs: CS) -> Result<Self, SynthesisError> {
-        let mut result = self.clone();
-        result.square_in_place();
-        Ok(result)
-    }
+    fn mul<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        _: CS,
+        _: &Self,
+    ) -> Result<Self, SynthesisError>;
 
-    /// Replace `self` with `self^2`.
-    fn square_in_place(&mut self) -> Result<&mut Self, SynthesisError> {
-        *self *= &*self;
+    fn mul_in_place<CS: ConstraintSystem<ConstraintF>>(
+        &mut self,
+        cs: CS,
+        other: &Self,
+    ) -> Result<&mut Self, SynthesisError> {
+        *self = self.mul(cs, other)?;
         Ok(self)
     }
 
-    /// Enforce that `self * other = result`.
-    fn mul_equals(&self, other: &Self, result: &Self) -> Result<(), SynthesisError> {
-        let actual_result = self * other;
-        result.enforce_equal(&actual_result)
+    fn square<CS: ConstraintSystem<ConstraintF>>(&self, cs: CS) -> Result<Self, SynthesisError> {
+        self.mul(cs, &self)
     }
 
-    fn inverse(&self) -> Result<Self, SynthesisError> {
+    fn square_in_place<CS: ConstraintSystem<ConstraintF>>(
+        &mut self,
+        cs: CS,
+    ) -> Result<&mut Self, SynthesisError> {
+        *self = self.square(cs)?;
+        Ok(self)
+    }
+
+    fn mul_equals<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        mut cs: CS,
+        other: &Self,
+        result: &Self,
+    ) -> Result<(), SynthesisError> {
+        let actual_result = self.mul(cs.ns(|| "calc_actual_result"), other)?;
+        result.enforce_equal(&mut cs.ns(|| "test_equals"), &actual_result)
+    }
+
+    fn square_equals<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        mut cs: CS,
+        result: &Self,
+    ) -> Result<(), SynthesisError> {
+        let actual_result = self.square(cs.ns(|| "calc_actual_result"))?;
+        result.enforce_equal(&mut cs.ns(|| "test_equals"), &actual_result)
+    }
+
+    fn add_constant<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        _: CS,
+        _: &F,
+    ) -> Result<Self, SynthesisError>;
+
+    fn add_constant_in_place<CS: ConstraintSystem<ConstraintF>>(
+        &mut self,
+        cs: CS,
+        other: &F,
+    ) -> Result<&mut Self, SynthesisError> {
+        *self = self.add_constant(cs, other)?;
+        Ok(self)
+    }
+
+    fn sub_constant<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        cs: CS,
+        fe: &F,
+    ) -> Result<Self, SynthesisError> {
+        self.add_constant(cs, &(-(*fe)))
+    }
+
+    fn sub_constant_in_place<CS: ConstraintSystem<ConstraintF>>(
+        &mut self,
+        cs: CS,
+        other: &F,
+    ) -> Result<&mut Self, SynthesisError> {
+        self.add_constant_in_place(cs, &(-(*other)))
+    }
+
+    fn mul_by_constant<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        _: CS,
+        _: &F,
+    ) -> Result<Self, SynthesisError>;
+
+    fn mul_by_constant_in_place<CS: ConstraintSystem<ConstraintF>>(
+        &mut self,
+        cs: CS,
+        other: &F,
+    ) -> Result<&mut Self, SynthesisError> {
+        *self = self.mul_by_constant(cs, other)?;
+        Ok(self)
+    }
+
+    fn inverse<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        mut cs: CS,
+    ) -> Result<Self, SynthesisError> {
         let one = Self::one(&mut cs.ns(|| "one"))?;
         let inverse = Self::alloc(&mut cs.ns(|| "alloc inverse"), || {
             self.get_value().and_then(|val| val.inverse()).get()
         })?;
-        self.mul_equals(&inverse, &one)?;
+        self.mul_equals(cs.ns(|| "check inv"), &inverse, &one)?;
         Ok(inverse)
     }
 
-    fn frobenius_map(&self, power: usize) -> Result<Self, SynthesisError>;
+    // Returns (self / denominator), but requires fewer constraints than
+    // self * denominator.inverse()
+    // It is up to the caller to ensure that denominator is non-zero,
+    // since in that case the result is unconstrained.
+    fn mul_by_inverse<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        mut cs: CS,
+        denominator: &Self,
+    ) -> Result<Self, SynthesisError> {
+        let denominator_inv_native = denominator
+            .get_value()
+            .and_then(|val| val.inverse())
+            .get()?;
+        let result_native = self.get_value().get()? * &denominator_inv_native;
 
-    fn frobenius_map_in_place(&mut self, power: usize) -> Result<&mut Self, SynthesisError> {
-        *self = self.frobenius_map(power)?;
+        let result = Self::alloc(&mut cs.ns(|| "alloc mul_by_inverse result"), || {
+            Ok(result_native)
+        })?;
+        result.mul_equals(cs.ns(|| "check mul_by_inverse"), &denominator, &self)?;
+
+        Ok(result)
+    }
+
+    fn frobenius_map<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        _: CS,
+        power: usize,
+    ) -> Result<Self, SynthesisError>;
+
+    fn frobenius_map_in_place<CS: ConstraintSystem<ConstraintF>>(
+        &mut self,
+        cs: CS,
+        power: usize,
+    ) -> Result<&mut Self, SynthesisError> {
+        *self = self.frobenius_map(cs, power)?;
         Ok(self)
     }
 
     /// Accepts as input a list of bits which, when interpreted in big-endian
     /// form, are a scalar.
     #[inline]
-    fn pow(&self, bits: &[Boolean]) -> Result<Self, SynthesisError> {
+    fn pow<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        mut cs: CS,
+        bits: &[Boolean],
+    ) -> Result<Self, SynthesisError> {
         let mut res = Self::one(cs.ns(|| "Alloc result"))?;
         for (i, bit) in bits.iter().enumerate() {
             res = res.square(cs.ns(|| format!("Double {}", i)))?;
@@ -122,22 +260,38 @@ pub trait FieldGadget<F: Field, ConstraintF: Field>:
         Ok(res)
     }
 
-    fn pow_by_constant<S: AsRef<[u64]>>(&self, exp: S) -> Result<Self, SynthesisError> {
-        let mut res = Self::one(self.cs.clone())?;
+    fn pow_by_constant<S: AsRef<[u64]>, CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        mut cs: CS,
+        exp: S,
+    ) -> Result<Self, SynthesisError> {
+        let mut res = self.clone();
         let mut found_one = false;
 
         for (i, bit) in BitIterator::new(exp).enumerate() {
             if found_one {
-                res.square_in_place()?;
+                res = res.square(cs.ns(|| format!("square for bit {:?}", i)))?;
             }
 
             if bit {
+                if found_one {
+                    res = res.mul(cs.ns(|| format!("mul for bit {:?}", i)), self)?;
+                }
                 found_one = true;
-                res *= self;
             }
         }
 
         Ok(res)
+    }
+
+    fn cost_of_mul() -> usize;
+
+    fn cost_of_mul_equals() -> usize {
+        Self::cost_of_mul() + <Self as EqGadget<ConstraintF>>::cost()
+    }
+
+    fn cost_of_inv() -> usize {
+        Self::cost_of_mul_equals()
     }
 }
 
@@ -159,6 +313,7 @@ pub(crate) mod tests {
         let b_native = FE::rand(&mut rng);
         let a = F::alloc(&mut cs.ns(|| "generate_a"), || Ok(a_native)).unwrap();
         let b = F::alloc(&mut cs.ns(|| "generate_b"), || Ok(b_native)).unwrap();
+        let b_const = F::alloc_constant(&mut cs.ns(|| "generate_b_as_constant"), b_native).unwrap();
 
         let zero = F::zero(cs.ns(|| "zero")).unwrap();
         let zero_native = zero.get_value().unwrap();
@@ -267,6 +422,12 @@ pub(crate) mod tests {
         assert_eq!(ab, ba);
         assert_eq!(ab.get_value().unwrap(), a_native * &b_native);
 
+        let ab_const = a.mul(cs.ns(|| "a_times_b_const"), &b_const).unwrap();
+        let b_const_a = b_const.mul(cs.ns(|| "b_const_times_a"), &a).unwrap();
+        assert_eq!(ab_const, b_const_a);
+        assert_eq!(ab_const, ab);
+        assert_eq!(ab_const.get_value().unwrap(), a_native * &b_native);
+
         // (a * b) * a = a * (b * a)
         let ab_a = ab.mul(cs.ns(|| "ab_times_a"), &a).unwrap();
         let a_ba = a.mul(cs.ns(|| "a_times_ba"), &ba).unwrap();
@@ -299,13 +460,23 @@ pub(crate) mod tests {
 
         let a_inv = a.inverse(cs.ns(|| "a_inv")).unwrap();
         a_inv
-            .mul_equals(cs.ns(|| "check_equals"), &a, &one)
+            .mul_equals(cs.ns(|| "check a_inv * a = 1"), &a, &one)
             .unwrap();
         assert_eq!(
             a_inv.get_value().unwrap(),
             a.get_value().unwrap().inverse().unwrap()
         );
         assert_eq!(a_inv.get_value().unwrap(), a_native.inverse().unwrap());
+
+        let a_b_inv = a.mul_by_inverse(cs.ns(|| "a_b_inv"), &b).unwrap();
+        a_b_inv
+            .mul_equals(cs.ns(|| "check a_b_inv * b = a"), &b, &a)
+            .unwrap();
+        assert_eq!(
+            a_b_inv.get_value().unwrap(),
+            a_native * b_native.inverse().unwrap()
+        );
+
         // a * a * a = a^3
         let bits = BitIterator::new([0x3])
             .map(Boolean::constant)
