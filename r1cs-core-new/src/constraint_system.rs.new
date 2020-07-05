@@ -1,6 +1,5 @@
 use crate::{
-    BTreeMap, LcIndex, LinearCombination, Matrix, Rc, String, SynthesisError, ToString, Variable,
-    Vec,
+    BTreeMap, LcIndex, LinearCombination, Matrix, Rc, String, SynthesisError, ToString, Variable, Vec,
 };
 use algebra_core::Field;
 use core::cell::{Ref, RefCell, RefMut};
@@ -22,7 +21,7 @@ pub type Name = crate::Cow<'static, str>;
 /// `⟨a_i, z⟩ ⋅ ⟨b_i, z⟩ = ⟨c_i, z⟩`, where `a_i`, `b_i`, and `c_i` are linear
 /// combinations over variables, and `z` is the concrete assignment to these
 /// variables.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ConstraintSystem<F: Field> {
     /// The mode in which the constraint system is operating. `self` can either
     /// be in setup mode (i.e., `self.mode == Mode::Setup`) or in proving mode
@@ -170,14 +169,14 @@ impl<F: Field> ConstraintSystem<F> {
 
     /// Obtain a variable representing a linear combination.
     #[inline]
-    pub fn new_lc(&mut self, lc: LinearCombination<F>) -> Variable {
+    pub fn new_lc(&mut self, lc: LinearCombination<F>) -> Result<Variable, SynthesisError> {
         let index = LcIndex(self.num_linear_combinations);
         let var = Variable::SymbolicLc(index);
 
         self.lc_map.insert(index, lc);
 
         self.num_linear_combinations += 1;
-        var
+        Ok(var)
     }
 
     /// Enforce a R1CS constraint with an automatically generated name.
@@ -202,9 +201,9 @@ impl<F: Field> ConstraintSystem<F> {
         c: LinearCombination<F>,
     ) -> Result<(), SynthesisError> {
         if self.should_construct_matrices() {
-            let a_index = self.new_lc(a).get_lc_index().unwrap();
-            let b_index = self.new_lc(b).get_lc_index().unwrap();
-            let c_index = self.new_lc(c).get_lc_index().unwrap();
+            let a_index = self.new_lc(a)?.get_lc_index().unwrap();
+            let b_index = self.new_lc(b)?.get_lc_index().unwrap();
+            let c_index = self.new_lc(c)?.get_lc_index().unwrap();
             self.a_constraints.push(a_index);
             self.b_constraints.push(b_index);
             self.c_constraints.push(c_index);
@@ -318,7 +317,6 @@ impl<F: Field> ConstraintSystem<F> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstraintMatrices<F: Field> {
     /// The number of variables that are "public instances" to the constraint system.
     pub num_instance_variables: usize,
@@ -346,12 +344,12 @@ pub struct ConstraintMatrices<F: Field> {
 
 /// A shared reference to a constraint system that can be stored in high level
 /// variables.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum ConstraintSystemRef<F: Field> {
     /// Represents the case where we *don't* enter a new namespace.
     CS(Rc<RefCell<ConstraintSystem<F>>>),
     /// Represents the case where we *do* enter a new namespace.
-    Namespace(Rc<RefCell<ConstraintSystem<F>>>),
+    Namespace(Rc<RefCell<ConstraintSystem<F>>>)
 }
 
 impl<F: Field> ConstraintSystemRef<F> {
@@ -363,7 +361,7 @@ impl<F: Field> ConstraintSystemRef<F> {
 
     fn inner(&self) -> &Rc<RefCell<ConstraintSystem<F>>> {
         match self {
-            Self::CS(a) | Self::Namespace(a) => a,
+            Self::CS(a) | Self::Namespace(a) => a
         }
     }
 
@@ -428,7 +426,7 @@ impl<F: Field> ConstraintSystemRef<F> {
 
     /// Obtain a variable representing a linear combination.
     #[inline]
-    pub fn new_lc(&self, lc: LinearCombination<F>) -> Variable {
+    pub fn new_lc(&self, lc: LinearCombination<F>) -> Result<Variable, SynthesisError> {
         self.inner().borrow_mut().new_lc(lc)
     }
 
@@ -452,9 +450,7 @@ impl<F: Field> ConstraintSystemRef<F> {
         b: LinearCombination<F>,
         c: LinearCombination<F>,
     ) -> Result<(), SynthesisError> {
-        self.inner()
-            .borrow_mut()
-            .enforce_named_constraint(name, a, b, c)
+        self.inner().borrow_mut().enforce_named_constraint(name, a, b, c)
     }
 
     /// Naively inlines symbolic linear combinations into the linear combinations

@@ -1,373 +1,349 @@
 use algebra::{bytes::ToBytes, FpParameters, PrimeField};
-use r1cs_core::{
-    ConstraintSystem,
-    ConstraintVar::{self, *},
-    LinearCombination, SynthesisError,
-};
+use r1cs_core::{lc, ConstraintSystemRef, LinearCombination, SynthesisError, Variable};
 
 use core::borrow::Borrow;
+use core::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
 
+use crate::fields::AllocatedField;
 use crate::{boolean::AllocatedBit, prelude::*, Assignment, Vec};
 
-pub mod cmp;
+// pub mod cmp;
 
-#[derive(Debug)]
-pub struct FpGadget<F: PrimeField> {
+#[derive(Debug, Clone)]
+pub struct AllocatedFp<F: PrimeField> {
     pub value: Option<F>,
-    pub variable: ConstraintVar<F>,
+    pub variable: Variable,
+    cs: ConstraintSystemRef<F>,
 }
 
-impl<F: PrimeField> FpGadget<F> {
-    #[inline]
-    pub fn from<CS: ConstraintSystem<F>>(mut cs: CS, value: &F) -> Self {
-        Self::alloc(cs.ns(|| "from"), || Ok(*value)).unwrap()
-    }
-
-    fn is_constant(&self) -> bool {
-        match &self.variable {
-            // If you don't do alloc_constant, you are guaranteed to get a variable,
-            // hence we assume that all variables are not the constant variable.
-            // Technically this omits recognizing some constants.
-            // E.g. given variables w,x,y,z with constraints:
-            // w = x + 1
-            // y = -x + 1
-            // and then created the variable z = w + y,
-            // this would not recognize that z is in fact a constant.
-            // Since this is an edge case, this is left as a TODO.
-            Var(_v) => false,
-            LC(l) => l.is_constant(),
+impl<F: PrimeField> AllocatedFp<F> {
+    pub fn new(value: Option<F>, variable: Variable, cs: ConstraintSystemRef<F>) -> Self {
+        Self {
+            value,
+            variable,
+            cs,
         }
     }
 }
 
-impl<F: PrimeField> FieldGadget<F, F> for FpGadget<F> {
-    type Variable = ConstraintVar<F>;
+impl<F: PrimeField> R1CSVar<F> for AllocatedFp<F> {
+    fn cs(&self) -> Option<ConstraintSystemRef<F>> {
+        Some(self.cs.clone())
+    }
+}
 
-    #[inline]
-    fn get_value(&self) -> Option<F> {
-        self.value
+impl<F: PrimeField> From<Boolean<F>> for AllocatedFp<F> {
+    fn from(other: Boolean<F>) -> Self {
+        if let Some(cs) = other.cs() {
+            let variable = cs.new_lc(other.lc());
+            Self::new(other.value().ok().map(|b| F::from(b as u8)), variable, cs)
+        } else {
+            unreachable!("Cannot create a constant value")
+        }
+    }
+}
+
+impl<F: PrimeField> AllocatedField<F> for AllocatedFp<F> {
+    type ConstraintF = F;
+
+    fn value(&self) -> Result<F, SynthesisError> {
+        self.value.get()
     }
 
-    #[inline]
-    fn get_variable(&self) -> Self::Variable {
-        self.variable.clone()
-    }
-
-    #[inline]
-    fn zero<CS: ConstraintSystem<F>>(_cs: CS) -> Result<Self, SynthesisError> {
-        let value = Some(F::zero());
-        Ok(FpGadget {
-            value,
-            variable: ConstraintVar::zero(),
-        })
-    }
-
-    #[inline]
-    fn one<CS: ConstraintSystem<F>>(_cs: CS) -> Result<Self, SynthesisError> {
-        let value = Some(F::one());
-        Ok(FpGadget {
-            value,
-            variable: CS::one().into(),
-        })
-    }
-
-    #[inline]
-    fn conditionally_add_constant<CS: ConstraintSystem<F>>(
-        &self,
-        mut _cs: CS,
-        bit: &Boolean,
-        coeff: F,
-    ) -> Result<Self, SynthesisError> {
-        let value = match (self.value, bit.get_value()) {
-            (Some(v), Some(b)) => Some(if b { v + &coeff } else { v }),
-            (..) => None,
-        };
-        Ok(FpGadget {
-            value,
-            variable: LC(bit.lc(CS::one(), coeff)) + &self.variable,
-        })
-    }
-
-    #[inline]
-    fn add<CS: ConstraintSystem<F>>(
-        &self,
-        mut _cs: CS,
-        other: &Self,
-    ) -> Result<Self, SynthesisError> {
+    fn add(&self, other: &Self) -> Result<Self, SynthesisError> {
         let value = match (self.value, other.value) {
             (Some(val1), Some(val2)) => Some(val1 + &val2),
             (..) => None,
         };
 
-        Ok(FpGadget {
-            value,
-            variable: &self.variable + &other.variable,
-        })
+        let variable = self.cs.new_lc(lc!() + self.variable + other.variable);
+        Ok(AllocatedFp::new(value, variable, self.cs.clone()))
     }
 
-    fn double<CS: ConstraintSystem<F>>(&self, _cs: CS) -> Result<Self, SynthesisError> {
-        let value = self.value.map(|val| val.double());
-        let mut variable = self.variable.clone();
-        variable.double_in_place();
-        Ok(FpGadget { value, variable })
-    }
-
-    fn double_in_place<CS: ConstraintSystem<F>>(
-        &mut self,
-        _cs: CS,
-    ) -> Result<&mut Self, SynthesisError> {
-        self.value.as_mut().map(|val| val.double_in_place());
-        self.variable.double_in_place();
-        Ok(self)
-    }
-
-    #[inline]
-    fn sub<CS: ConstraintSystem<F>>(
-        &self,
-        mut _cs: CS,
-        other: &Self,
-    ) -> Result<Self, SynthesisError> {
+    fn sub(&self, other: &Self) -> Result<Self, SynthesisError> {
         let value = match (self.value, other.value) {
             (Some(val1), Some(val2)) => Some(val1 - &val2),
             (..) => None,
         };
 
-        Ok(FpGadget {
-            value,
-            variable: &self.variable - &other.variable,
-        })
+        let variable = self.cs.new_lc(lc!() + self.variable - other.variable);
+        Ok(AllocatedFp::new(value, variable, self.cs.clone()))
     }
 
-    #[inline]
-    fn negate<CS: ConstraintSystem<F>>(&self, cs: CS) -> Result<Self, SynthesisError> {
-        let mut result = self.clone();
-        result.negate_in_place(cs)?;
-        Ok(result)
-    }
-
-    #[inline]
-    fn negate_in_place<CS: ConstraintSystem<F>>(
-        &mut self,
-        _cs: CS,
-    ) -> Result<&mut Self, SynthesisError> {
-        self.value.as_mut().map(|val| *val = -(*val));
-        self.variable.negate_in_place();
-        Ok(self)
-    }
-
-    #[inline]
-    fn mul<CS: ConstraintSystem<F>>(
-        &self,
-        mut cs: CS,
-        other: &Self,
-    ) -> Result<Self, SynthesisError> {
-        // Apply constant folding if it applies
-        // unwrap is used, because these values are guaranteed to exist.
-        if other.is_constant() {
-            return self.mul_by_constant(cs, &other.get_value().unwrap());
-        } else if self.is_constant() {
-            return other.mul_by_constant(cs, &self.get_value().unwrap());
-        }
-
-        let product = Self::alloc(cs.ns(|| "mul"), || {
+    fn mul(&self, other: &Self) -> Result<Self, SynthesisError> {
+        let product = AllocatedFp::alloc_witness(self.cs.clone(), || {
             Ok(self.value.get()? * &other.value.get()?)
-        })?;
-        cs.enforce(
-            || "mul_constraint",
-            |lc| &self.variable + lc,
-            |lc| &other.variable + lc,
-            |lc| &product.variable + lc,
-        );
+        })
+        .unwrap();
+        self.cs
+            .enforce_constraint(
+                lc!() + self.variable,
+                lc!() + other.variable,
+                lc!() + product.variable,
+            )
+            .unwrap();
         Ok(product)
     }
 
-    #[inline]
-    fn add_constant<CS: ConstraintSystem<F>>(
-        &self,
-        _cs: CS,
-        other: &F,
-    ) -> Result<Self, SynthesisError> {
+    fn add_constant(&self, other: F) -> Result<Self, SynthesisError> {
         let value = self.value.map(|val| val + other);
-        Ok(FpGadget {
-            value,
-            variable: self.variable.clone() + (*other, CS::one()),
-        })
+        let variable = self
+            .cs
+            .new_lc(lc!() + self.variable + (other, Variable::One));
+        Ok(AllocatedFp::new(value, variable, self.cs.clone()))
+    }
+
+    fn sub_constant(&self, other: F) -> Result<Self, SynthesisError> {
+        let value = self.value.map(|val| val - other);
+        let variable = self
+            .cs
+            .new_lc(lc!() + self.variable - (other, Variable::One));
+        Ok(AllocatedFp::new(value, variable, self.cs.clone()))
+    }
+
+    fn mul_constant(&self, other: F) -> Result<Self, SynthesisError> {
+        let value = self.value.map(|val| val * other);
+        let variable = self.cs.new_lc(lc!() + (other, self.variable));
+        Ok(AllocatedFp::new(value, variable, self.cs.clone()))
+    }
+
+    fn double(&self) -> Result<Self, SynthesisError> {
+        let value = self.value.map(|val| val.double());
+        let variable = self.cs.new_lc(lc!() + self.variable + self.variable);
+        Ok(Self::new(value, variable, self.cs.clone()))
     }
 
     #[inline]
-    fn add_constant_in_place<CS: ConstraintSystem<F>>(
-        &mut self,
-        _cs: CS,
-        other: &F,
-    ) -> Result<&mut Self, SynthesisError> {
-        self.value.as_mut().map(|val| *val += other);
-        self.variable += (*other, CS::one());
-        Ok(self)
-    }
-
-    #[inline]
-    fn mul_by_constant<CS: ConstraintSystem<F>>(
-        &self,
-        cs: CS,
-        other: &F,
-    ) -> Result<Self, SynthesisError> {
+    fn negate(&self) -> Result<Self, SynthesisError> {
         let mut result = self.clone();
-        result.mul_by_constant_in_place(cs, other)?;
+        result.negate_in_place()?;
         Ok(result)
     }
 
     #[inline]
-    fn mul_by_constant_in_place<CS: ConstraintSystem<F>>(
-        &mut self,
-        mut _cs: CS,
-        other: &F,
-    ) -> Result<&mut Self, SynthesisError> {
-        self.value.as_mut().map(|val| *val *= other);
-        self.variable *= *other;
+    fn negate_in_place(&mut self) -> Result<&mut Self, SynthesisError> {
+        self.value.as_mut().map(|val| *val = -(*val));
+        self.variable = self.cs.new_lc(lc!() - self.variable);
         Ok(self)
     }
 
     #[inline]
-    fn inverse<CS: ConstraintSystem<F>>(&self, mut cs: CS) -> Result<Self, SynthesisError> {
-        let inverse = Self::alloc(cs.ns(|| "inverse"), || {
-            let result = self.value.get()?;
-            let inv = result.inverse().expect("Inverse doesn't exist!");
-            Ok(inv)
+    fn inverse(&self) -> Result<Self, SynthesisError> {
+        let inverse = Self::alloc_witness(self.cs.clone(), || {
+            self.value
+                .get()?
+                .inverse()
+                .ok_or(SynthesisError::AssignmentMissing)
         })?;
 
-        let one = CS::one();
-        cs.enforce(
-            || "inv_constraint",
-            |lc| &self.variable + lc,
-            |lc| &inverse.variable + lc,
-            |lc| lc + one,
-        );
+        self.cs.enforce_constraint(
+            lc!() + self.variable,
+            lc!() + inverse.variable,
+            lc!() + Variable::One,
+        )?;
         Ok(inverse)
     }
 
-    fn frobenius_map<CS: ConstraintSystem<F>>(
-        &self,
-        _: CS,
-        _: usize,
-    ) -> Result<Self, SynthesisError> {
+    fn frobenius_map(&self, _: usize) -> Result<Self, SynthesisError> {
         Ok(self.clone())
     }
 
-    fn frobenius_map_in_place<CS: ConstraintSystem<F>>(
-        &mut self,
-        _: CS,
-        _: usize,
-    ) -> Result<&mut Self, SynthesisError> {
+    fn frobenius_map_in_place(&mut self, _: usize) -> Result<&mut Self, SynthesisError> {
         Ok(self)
     }
 
-    fn mul_equals<CS: ConstraintSystem<F>>(
-        &self,
-        mut cs: CS,
-        other: &Self,
-        result: &Self,
-    ) -> Result<(), SynthesisError> {
-        cs.enforce(
-            || "mul_constraint",
-            |lc| &self.variable + lc,
-            |lc| &other.variable + lc,
-            |lc| &result.variable + lc,
-        );
-        Ok(())
+    fn mul_equals(&self, other: &Self, result: &Self) -> Result<(), SynthesisError> {
+        self.cs.enforce_constraint(
+            lc!() + self.variable,
+            lc!() + other.variable,
+            lc!() + result.variable,
+        )
     }
 
-    fn square_equals<CS: ConstraintSystem<F>>(
-        &self,
-        mut cs: CS,
-        result: &Self,
-    ) -> Result<(), SynthesisError> {
-        cs.enforce(
-            || "sqr_constraint",
-            |lc| &self.variable + lc,
-            |lc| &self.variable + lc,
-            |lc| &result.variable + lc,
-        );
-        Ok(())
-    }
-
-    fn cost_of_mul() -> usize {
-        1
-    }
-
-    fn cost_of_mul_equals() -> usize {
-        1
-    }
-
-    fn cost_of_inv() -> usize {
-        1
+    fn square_equals(&self, result: &Self) -> Result<(), SynthesisError> {
+        self.cs.enforce_constraint(
+            lc!() + self.variable,
+            lc!() + self.variable,
+            lc!() + result.variable,
+        )
     }
 }
 
-impl<F: PrimeField> PartialEq for FpGadget<F> {
-    fn eq(&self, other: &Self) -> bool {
-        self.value.is_some() && other.value.is_some() && self.value == other.value
+/****************************************************************************/
+/****************************************************************************/
+
+impl<'a, F: PrimeField> Add<&'a AllocatedFp<F>> for &'a AllocatedFp<F> {
+    type Output = AllocatedFp<F>;
+
+    fn add(self, other: Self) -> AllocatedFp<F> {
+        AllocatedField::add(self, other).unwrap()
     }
 }
 
-impl<F: PrimeField> Eq for FpGadget<F> {}
+impl<'a, F: PrimeField> Sub<&'a AllocatedFp<F>> for &'a AllocatedFp<F> {
+    type Output = AllocatedFp<F>;
 
-impl<F: PrimeField> EqGadget<F> for FpGadget<F> {}
+    fn sub(self, other: Self) -> AllocatedFp<F> {
+        AllocatedField::sub(self, other).unwrap()
+    }
+}
 
-impl<F: PrimeField> ConditionalEqGadget<F> for FpGadget<F> {
+impl<'a, F: PrimeField> Mul<&'a AllocatedFp<F>> for &'a AllocatedFp<F> {
+    type Output = AllocatedFp<F>;
+
+    fn mul(self, other: Self) -> AllocatedFp<F> {
+        AllocatedField::mul(self, other).unwrap()
+    }
+}
+
+impl<'a, F: PrimeField> AddAssign<&'a AllocatedFp<F>> for AllocatedFp<F> {
+    fn add_assign(&mut self, other: &'a Self) {
+        let result = &*self + other;
+        *self = result
+    }
+}
+
+impl<'a, F: PrimeField> SubAssign<&'a AllocatedFp<F>> for AllocatedFp<F> {
+    fn sub_assign(&mut self, other: &'a Self) {
+        let result = &*self - other;
+        *self = result
+    }
+}
+
+impl<'a, F: PrimeField> MulAssign<&'a AllocatedFp<F>> for AllocatedFp<F> {
+    fn mul_assign(&mut self, other: &'a Self) {
+        let result = &*self - other;
+        *self = result
+    }
+}
+
+/****************************************************************************/
+/****************************************************************************/
+
+impl<'a, F: PrimeField> Add<F> for &'a AllocatedFp<F> {
+    type Output = AllocatedFp<F>;
+
+    fn add(self, other: F) -> AllocatedFp<F> {
+        self.add_constant(other).unwrap()
+    }
+}
+
+impl<'a, F: PrimeField> Sub<F> for &'a AllocatedFp<F> {
+    type Output = AllocatedFp<F>;
+
+    fn sub(self, other: F) -> AllocatedFp<F> {
+        self.sub_constant(other).unwrap()
+    }
+}
+
+impl<'a, F: PrimeField> Mul<F> for &'a AllocatedFp<F> {
+    type Output = AllocatedFp<F>;
+
+    fn mul(self, other: F) -> AllocatedFp<F> {
+        self.mul_constant(other).unwrap()
+    }
+}
+
+impl<F: PrimeField> AddAssign<F> for AllocatedFp<F> {
+    fn add_assign(&mut self, other: F) {
+        let result = &*self + other;
+        *self = result
+    }
+}
+
+impl<F: PrimeField> SubAssign<F> for AllocatedFp<F> {
+    fn sub_assign(&mut self, other: F) {
+        let result = &*self - other;
+        *self = result
+    }
+}
+
+impl<F: PrimeField> MulAssign<F> for AllocatedFp<F> {
+    fn mul_assign(&mut self, other: F) {
+        let result = &*self - other;
+        *self = result
+    }
+}
+
+/****************************************************************************/
+/****************************************************************************/
+
+/****************************************************************************/
+/****************************************************************************/
+
+impl<F: PrimeField> EqGadget<F> for AllocatedFp<F> {
+    fn is_eq(&self, other: &Self) -> Result<Boolean<F>, SynthesisError> {
+        let is_equal =
+            Boolean::alloc_witness(self.cs.clone(), || Ok(self.value()? == other.value()?))?;
+
+        let multiplier = Self::alloc_witness(self.cs.clone(), || {
+            if is_equal.value()? {
+                let difference = self.value()? - other.value()?;
+                difference
+                    .inverse()
+                    .ok_or(SynthesisError::AssignmentMissing)
+            } else {
+                Ok(F::zero())
+            }
+        })?;
+        self.cs.enforce_constraint(
+            lc!() + self.variable - other.variable,
+            lc!() + multiplier.variable,
+            is_equal.lc(),
+        )?;
+        Ok(is_equal)
+    }
+
     #[inline]
-    fn conditional_enforce_equal<CS: ConstraintSystem<F>>(
+    fn conditional_enforce_equal(
         &self,
-        mut cs: CS,
         other: &Self,
-        condition: &Boolean,
+        should_enforce: &Boolean<F>,
     ) -> Result<(), SynthesisError> {
-        let difference = self.sub(cs.ns(|| "difference"), other)?;
-        let one = CS::one();
-        let one_const = F::one();
-        cs.enforce(
-            || "conditional_equals",
-            |lc| &difference.variable + lc,
-            |lc| lc + &condition.lc(one, one_const),
-            |lc| lc,
-        );
-        Ok(())
+        self.cs.enforce_constraint(
+            lc!() + self.variable - other.variable,
+            lc!() + should_enforce.lc(),
+            lc!(),
+        )
     }
 
-    fn cost() -> usize {
-        1
-    }
-}
-
-impl<F: PrimeField> NEqGadget<F> for FpGadget<F> {
     #[inline]
-    fn enforce_not_equal<CS: ConstraintSystem<F>>(
+    fn conditional_enforce_not_equal(
         &self,
-        mut cs: CS,
         other: &Self,
+        should_enforce: &Boolean<F>,
     ) -> Result<(), SynthesisError> {
-        let a_minus_b = self.sub(cs.ns(|| "A - B"), other)?;
-        a_minus_b.inverse(cs.ns(|| "Enforce inverse exists"))?;
-        Ok(())
-    }
+        let multiplier = Self::alloc_witness(self.cs.clone(), || {
+            if should_enforce.value()? {
+                let difference = self.value()? - other.value()?;
+                difference
+                    .inverse()
+                    .ok_or(SynthesisError::AssignmentMissing)
+            } else {
+                Ok(F::zero())
+            }
+        })?;
 
-    fn cost() -> usize {
-        1
+        self.cs.enforce_constraint(
+            lc!() + self.variable - other.variable,
+            lc!() + multiplier.variable,
+            should_enforce.lc(),
+        )?;
+        Ok(())
     }
 }
 
-impl<F: PrimeField> ToBitsGadget<F> for FpGadget<F> {
+impl<F: PrimeField> ToBitsGadget<F> for AllocatedFp<F> {
     /// Outputs the unique bit-wise decomposition of `self` in *big-endian*
     /// form.
-    fn to_bits<CS: ConstraintSystem<F>>(&self, mut cs: CS) -> Result<Vec<Boolean>, SynthesisError> {
-        let bits = self.to_non_unique_bits(&mut cs)?;
-        Boolean::enforce_in_field::<_, _, F>(&mut cs, &bits)?;
+    fn to_bits(&self) -> Result<Vec<Boolean<F>>, SynthesisError> {
+        let bits = self.to_non_unique_bits()?;
+        Boolean::enforce_in_field(&bits)?;
         Ok(bits)
     }
 
-    fn to_non_unique_bits<CS: ConstraintSystem<F>>(
-        &self,
-        mut cs: CS,
-    ) -> Result<Vec<Boolean>, SynthesisError> {
+    fn to_non_unique_bits(&self) -> Result<Vec<Boolean<F>>, SynthesisError> {
+        let cs = self.cs.clone();
         let num_bits = F::Params::MODULUS_BITS;
         use algebra::BitIterator;
         let bit_values = match self.value {
@@ -393,38 +369,35 @@ impl<F: PrimeField> ToBitsGadget<F> for FpGadget<F> {
         };
 
         let mut bits = vec![];
-        for (i, b) in bit_values.into_iter().enumerate() {
-            bits.push(AllocatedBit::alloc(cs.ns(|| format!("bit {}", i)), || {
-                b.get()
-            })?);
+        for b in bit_values {
+            bits.push(AllocatedBit::alloc_witness(cs.clone(), || b.get())?);
         }
 
         let mut lc = LinearCombination::zero();
         let mut coeff = F::one();
 
         for bit in bits.iter().rev() {
-            lc += (coeff, bit.get_variable());
+            lc += (coeff, bit.variable());
 
             coeff.double_in_place();
         }
 
-        lc = &self.variable - lc;
+        lc = lc - &self.variable;
 
-        cs.enforce(|| "unpacking_constraint", |lc| lc, |lc| lc, |_| lc);
+        cs.enforce_constraint(lc!(), lc!(), lc)?;
 
         Ok(bits.into_iter().map(Boolean::from).collect())
     }
 }
 
-impl<F: PrimeField> ToBytesGadget<F> for FpGadget<F> {
+impl<F: PrimeField> ToBytesGadget<F> for AllocatedFp<F> {
     /// Outputs the unique byte decomposition of `self` in *little-endian*
     /// form.
-    fn to_bytes<CS: ConstraintSystem<F>>(&self, mut cs: CS) -> Result<Vec<UInt8>, SynthesisError> {
-        let bytes = self.to_non_unique_bytes(&mut cs)?;
-        Boolean::enforce_in_field::<_, _, F>(
-            &mut cs,
+    fn to_bytes(&self) -> Result<Vec<UInt8<F>>, SynthesisError> {
+        let bytes = self.to_non_unique_bytes()?;
+        Boolean::enforce_in_field(
             &bytes.iter()
-                .flat_map(|byte_gadget| byte_gadget.into_bits_le())
+                .flat_map(|b| b.into_bits_le())
                 // This reverse maps the bits into big-endian form, as required by `enforce_in_field`.
                 .rev()
                 .collect::<Vec<_>>(),
@@ -433,10 +406,8 @@ impl<F: PrimeField> ToBytesGadget<F> for FpGadget<F> {
         Ok(bytes)
     }
 
-    fn to_non_unique_bytes<CS: ConstraintSystem<F>>(
-        &self,
-        mut cs: CS,
-    ) -> Result<Vec<UInt8>, SynthesisError> {
+    fn to_non_unique_bytes(&self) -> Result<Vec<UInt8<F>>, SynthesisError> {
+        let cs = self.cs.clone();
         let byte_values = match self.value {
             Some(value) => to_bytes![&value.into_repr()]?
                 .into_iter()
@@ -449,180 +420,148 @@ impl<F: PrimeField> ToBytesGadget<F> for FpGadget<F> {
             }
         };
 
-        let bytes = UInt8::alloc_vec(cs.ns(|| "Alloc bytes"), &byte_values)?;
+        let bytes = UInt8::alloc_witness_vec(cs.clone(), &byte_values)?;
 
         let mut lc = LinearCombination::zero();
         let mut coeff = F::one();
 
-        for bit in bytes
-            .iter()
-            .flat_map(|byte_gadget| byte_gadget.bits.clone())
-        {
+        for bit in bytes.iter().flat_map(|b| b.bits.clone()) {
             match bit {
                 Boolean::Is(bit) => {
-                    lc += (coeff, bit.get_variable());
+                    lc += (coeff, bit.variable());
                     coeff.double_in_place();
                 }
                 Boolean::Constant(_) | Boolean::Not(_) => unreachable!(),
             }
         }
 
-        lc = &self.variable - lc;
+        lc = lc - &self.variable;
 
-        cs.enforce(|| "unpacking_constraint", |lc| lc, |lc| lc, |_| lc);
+        cs.enforce_constraint(lc!(), lc!(), lc)?;
 
         Ok(bytes)
     }
 }
 
-impl<F: PrimeField> CondSelectGadget<F> for FpGadget<F> {
+impl<F: PrimeField> CondSelectGadget<F> for AllocatedFp<F> {
     #[inline]
-    fn conditionally_select<CS: ConstraintSystem<F>>(
-        mut cs: CS,
-        cond: &Boolean,
+    fn conditionally_select(
+        cond: &Boolean<F>,
         true_value: &Self,
         false_value: &Self,
     ) -> Result<Self, SynthesisError> {
-        if let Boolean::Constant(cond) = *cond {
-            if cond {
-                Ok(true_value.clone())
-            } else {
-                Ok(false_value.clone())
-            }
-        } else {
-            let result = Self::alloc(cs.ns(|| ""), || {
-                cond.get_value()
-                    .and_then(|cond| if cond { true_value } else { false_value }.get_value())
-                    .get()
-            })?;
-            // a = self; b = other; c = cond;
-            //
-            // r = c * a + (1  - c) * b
-            // r = b + c * (a - b)
-            // c * (a - b) = r - b
-            let one = CS::one();
-            cs.enforce(
-                || "conditionally_select",
-                |_| cond.lc(one, F::one()),
-                |lc| (&true_value.variable - &false_value.variable) + lc,
-                |lc| (&result.variable - &false_value.variable) + lc,
-            );
+        match cond {
+            Boolean::Constant(true) => Ok(true_value.clone()),
+            Boolean::Constant(false) => Ok(false_value.clone()),
+            _ => {
+                let cs = cond.cs().unwrap();
+                let result = Self::alloc_witness(cs.clone(), || {
+                    cond.value()
+                        .and_then(|c| if c { true_value } else { false_value }.value())
+                })?;
+                // a = self; b = other; c = cond;
+                //
+                // r = c * a + (1  - c) * b
+                // r = b + c * (a - b)
+                // c * (a - b) = r - b
+                cs.enforce_constraint(
+                    cond.lc(),
+                    lc!() + true_value.variable - false_value.variable,
+                    lc!() + result.variable - false_value.variable,
+                )?;
 
-            Ok(result)
+                Ok(result)
+            }
         }
     }
-
-    fn cost() -> usize {
-        1
-    }
 }
+
 /// Uses two bits to perform a lookup into a table
 /// `b` is little-endian: `b[0]` is LSB.
-impl<F: PrimeField> TwoBitLookupGadget<F> for FpGadget<F> {
+impl<F: PrimeField> TwoBitLookupGadget<F> for AllocatedFp<F> {
     type TableConstant = F;
-    fn two_bit_lookup<CS: ConstraintSystem<F>>(
-        mut cs: CS,
-        b: &[Boolean],
-        c: &[Self::TableConstant],
-    ) -> Result<Self, SynthesisError> {
+    fn two_bit_lookup(b: &[Boolean<F>], c: &[Self::TableConstant]) -> Result<Self, SynthesisError> {
         debug_assert!(b.len() == 2);
         debug_assert!(c.len() == 4);
+        if let Some(cs) = b.cs() {
+            let result = Self::alloc_witness(cs.clone(), || {
+                let lsb = b[0].value()? as usize;
+                let msb = b[1].value()? as usize;
+                let index = lsb + (1 << msb);
+                Ok(c[index])
+            })?;
+            let one = Variable::One;
+            cs.enforce_constraint(
+                lc!() + b[1].lc() * (c[3] - &c[2] - &c[1] + &c[0]) + (c[1] - &c[0], one),
+                lc!() + b[0].lc(),
+                lc!() + result.variable - (c[0], one) + b[1].lc() * (c[0] - &c[2]),
+            )?;
 
-        let result = Self::alloc(cs.ns(|| "Allocate lookup result"), || {
-            match (b[0].get_value().get()?, b[1].get_value().get()?) {
-                (false, false) => Ok(c[0]),
-                (false, true) => Ok(c[2]),
-                (true, false) => Ok(c[1]),
-                (true, true) => Ok(c[3]),
-            }
-        })?;
-        let one = CS::one();
-        cs.enforce(
-            || "Enforce lookup",
-            |lc| lc + b[1].lc(one, c[3] - &c[2] - &c[1] + &c[0]) + (c[1] - &c[0], one),
-            |lc| lc + b[0].lc(one, F::one()),
-            |lc| result.get_variable() + lc + (-c[0], one) + b[1].lc(one, c[0] - &c[2]),
-        );
-
-        Ok(result)
-    }
-
-    fn cost() -> usize {
-        1
+            Ok(result)
+        } else {
+            unreachable!("must provide a way to obtain a ConstraintSystemRef")
+        }
     }
 }
 
-impl<F: PrimeField> ThreeBitCondNegLookupGadget<F> for FpGadget<F> {
+impl<F: PrimeField> ThreeBitCondNegLookupGadget<F> for AllocatedFp<F> {
     type TableConstant = F;
 
-    fn three_bit_cond_neg_lookup<CS: ConstraintSystem<F>>(
-        mut cs: CS,
-        b: &[Boolean],
-        b0b1: &Boolean,
+    fn three_bit_cond_neg_lookup(
+        b: &[Boolean<F>],
+        b0b1: &Boolean<F>,
         c: &[Self::TableConstant],
     ) -> Result<Self, SynthesisError> {
         debug_assert!(b.len() == 3);
         debug_assert!(c.len() == 4);
 
-        let result = Self::alloc(cs.ns(|| "Allocate lookup result"), || {
-            let y = match (b[0].get_value().get()?, b[1].get_value().get()?) {
-                (false, false) => c[0],
-                (false, true) => c[2],
-                (true, false) => c[1],
-                (true, true) => c[3],
-            };
-            if b[2].get_value().get()? {
-                Ok(-y)
-            } else {
+        if let Some(cs) = b.cs() {
+            let result = Self::alloc_witness(cs.clone(), || {
+                let lsb = b[0].value()? as usize;
+                let msb = b[1].value()? as usize;
+                let index = lsb + (1 << msb);
+                let intermediate = c[index];
+
+                let is_negative = b[2].value()?;
+                let y = if is_negative {
+                    -intermediate
+                } else {
+                    intermediate
+                };
                 Ok(y)
-            }
-        })?;
+            })?;
 
-        let one = CS::one();
-        let y_lc = b0b1.lc(one, c[3] - &c[2] - &c[1] + &c[0])
-            + b[0].lc(one, c[1] - &c[0])
-            + b[1].lc(one, c[2] - &c[0])
-            + (c[0], one);
-        cs.enforce(
-            || "Enforce lookup",
-            |_| y_lc.clone() + y_lc.clone(),
-            |lc| lc + b[2].lc(one, F::one()),
-            |_| -result.get_variable() + y_lc.clone(),
-        );
+            let y_lc = b0b1.lc() * (c[3] - &c[2] - &c[1] + &c[0])
+                + b[0].lc() * (c[1] - &c[0])
+                + b[1].lc() * (c[2] - &c[0])
+                + (c[0], Variable::One);
+            cs.enforce_constraint(
+                y_lc.clone() + y_lc.clone(),
+                b[2].lc(),
+                y_lc.clone() - result.variable,
+            )?;
 
-        Ok(result)
-    }
-
-    fn cost() -> usize {
-        2
-    }
-}
-
-impl<F: PrimeField> Clone for FpGadget<F> {
-    fn clone(&self) -> Self {
-        Self {
-            value: self.value.clone(),
-            variable: self.variable.clone(),
+            Ok(result)
+        } else {
+            unreachable!("must provide a way to obtain a ConstraintSystemRef")
         }
     }
 }
 
-impl<F: PrimeField> AllocGadget<F, F> for FpGadget<F> {
+impl<F: PrimeField> AllocVar<F, F> for AllocatedFp<F> {
     #[inline]
-    fn alloc_constant<T, CS: ConstraintSystem<F>>(_cs: CS, t: T) -> Result<Self, SynthesisError>
-    where
-        T: Borrow<F>,
-    {
-        let value = t.borrow().clone();
-        Ok(Self {
-            value: Some(value),
-            variable: LinearCombination::from((value, CS::one())).into(),
-        })
+    fn alloc_constant(
+        cs: ConstraintSystemRef<F>,
+        t: impl Borrow<F>,
+    ) -> Result<Self, SynthesisError> {
+        let v = *t.borrow();
+        let lc = cs.new_lc(lc!() + (v, Variable::One));
+        Ok(Self::new(Some(v), lc, cs))
     }
 
     #[inline]
-    fn alloc<FN, T, CS: ConstraintSystem<F>>(
-        mut cs: CS,
+    fn alloc_witness_checked<FN, T>(
+        cs: ConstraintSystemRef<F>,
         value_gen: FN,
     ) -> Result<Self, SynthesisError>
     where
@@ -630,23 +569,16 @@ impl<F: PrimeField> AllocGadget<F, F> for FpGadget<F> {
         T: Borrow<F>,
     {
         let mut value = None;
-        let variable = cs.alloc(
-            || "alloc",
-            || {
-                let tmp = *value_gen()?.borrow();
-                value = Some(tmp);
-                Ok(tmp)
-            },
-        )?;
-        Ok(FpGadget {
-            value,
-            variable: Var(variable),
-        })
+        let variable = cs.new_witness_variable(|| {
+            value = Some(*value_gen()?.borrow());
+            value.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        Ok(Self::new(value, variable, cs.clone()))
     }
 
     #[inline]
-    fn alloc_input<FN, T, CS: ConstraintSystem<F>>(
-        mut cs: CS,
+    fn alloc_input_checked<FN, T>(
+        cs: ConstraintSystemRef<F>,
         value_gen: FN,
     ) -> Result<Self, SynthesisError>
     where
@@ -654,17 +586,10 @@ impl<F: PrimeField> AllocGadget<F, F> for FpGadget<F> {
         T: Borrow<F>,
     {
         let mut value = None;
-        let variable = cs.alloc_input(
-            || "alloc",
-            || {
-                let tmp = *value_gen()?.borrow();
-                value = Some(tmp);
-                Ok(tmp)
-            },
-        )?;
-        Ok(FpGadget {
-            value,
-            variable: Var(variable),
-        })
+        let variable = cs.new_input_variable(|| {
+            value = Some(*value_gen()?.borrow());
+            value.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        Ok(Self::new(value, variable, cs.clone()))
     }
 }

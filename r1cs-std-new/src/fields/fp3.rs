@@ -83,12 +83,8 @@ impl<P: Fp3Parameters<Fp = ConstraintF>, ConstraintF: PrimeField + SquareRootFie
     );
 
     #[inline]
-    fn get_value(&self) -> Option<Fp3<P>> {
-        match (
-            self.c0.get_value(),
-            self.c1.get_value(),
-            self.c2.get_value(),
-        ) {
+    fn value(&self) -> Option<Fp3<P>> {
+        match (self.c0.value(), self.c1.value(), self.c2.value()) {
             (Some(c0), Some(c1), Some(c2)) => Some(Fp3::new(c0, c1, c2)),
             (..) => None,
         }

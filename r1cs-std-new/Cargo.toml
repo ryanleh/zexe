@@ -1,5 +1,5 @@
 [package]
-name = "r1cs-std"
+name = "r1cs-std-new"
 version = "0.1.0"
 authors = [
     "Sean Bowe",
@@ -23,7 +23,7 @@ edition = "2018"
 
 [dependencies]
 algebra = { path = "../algebra", default-features = false }
-r1cs-core = { path = "../r1cs-core", default-features = false }
+r1cs-core = { package = "r1cs-core-new", path = "../r1cs-core-new", default-features = false }
 derivative = { version = "2", features = ["use_core"] }
 
 [dev-dependencies]

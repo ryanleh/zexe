@@ -13,23 +13,39 @@
 pub extern crate alloc;
 
 #[cfg(not(feature = "std"))]
-pub use alloc::{collections::BTreeMap, format, rc::Rc, string::String, vec, vec::Vec};
+pub use alloc::{
+    borrow::Cow,
+    collections::BTreeMap,
+    format,
+    rc::Rc,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 
 #[cfg(feature = "std")]
-pub use std::{collections::BTreeMap, format, rc::Rc, string::String, vec, vec::Vec};
+pub use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    format,
+    rc::Rc,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 
 mod constraint_system;
 mod error;
 mod impl_lc;
 
 pub use algebra_core::{Field, ToConstraintField};
-pub use constraint_system::{ConstraintSynthesizer, ConstraintSystem, ConstraintSystemRef};
+pub use constraint_system::{ConstraintSynthesizer, ConstraintSystem, ConstraintSystemRef, Name};
 pub use error::SynthesisError;
 
 use core::cmp::Ordering;
 
 /// A linear combination of variables according to associated coefficients.
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinearCombination<F: Field>(pub Vec<(F, Variable)>);
 
 /// A sparse representation of constraint matrices.
@@ -53,6 +69,14 @@ pub enum Variable {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 /// An opaque counter for symbolic linear combinations.
 pub struct LcIndex(usize);
+
+/// Generate a `LinearCombination` from arithmetic expressions involving `Variable`s.
+#[macro_export]
+macro_rules! lc {
+    () => {
+        LinearCombination::zero()
+    };
+}
 
 impl Variable {
     /// Is `self` the zero variable?

@@ -8,6 +8,11 @@ impl<F: Field> LinearCombination<F> {
         Self(Vec::new())
     }
 
+    /// Create a new empty linear combination.
+    pub fn zero() -> Self {
+        Self(Vec::new())
+    }
+
     /// Deduplicate entries in `self`.
     pub fn compactify(&mut self) {
         unimplemented!()
@@ -145,6 +150,24 @@ impl<F: Field> Add<Variable> for LinearCombination<F> {
     #[inline]
     fn add(self, other: Variable) -> LinearCombination<F> {
         self + (F::one(), other)
+    }
+}
+
+impl<'a, F: Field> Add<&'a Variable> for LinearCombination<F> {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, other: &'a Variable) -> LinearCombination<F> {
+        self + *other
+    }
+}
+
+impl<'a, F: Field> Sub<&'a Variable> for LinearCombination<F> {
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, other: &'a Variable) -> LinearCombination<F> {
+        self - *other
     }
 }
 

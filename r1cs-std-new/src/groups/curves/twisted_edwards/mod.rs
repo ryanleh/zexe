@@ -83,9 +83,9 @@ mod montgomery_affine_impl {
         ) -> Result<AffineGadget<P, ConstraintF, F>, SynthesisError> {
             // Compute u = x / y
             let u = F::alloc(cs.ns(|| "u"), || {
-                let mut t0 = self.x.get_value().get()?;
+                let mut t0 = self.x.value().get()?;
 
-                match self.y.get_value().get()?.inverse() {
+                match self.y.value().get()?.inverse() {
                     Some(invy) => {
                         t0.mul_assign(&invy);
 
@@ -98,7 +98,7 @@ mod montgomery_affine_impl {
             u.mul_equals(cs.ns(|| "u equals"), &self.y, &self.x)?;
 
             let v = F::alloc(cs.ns(|| "v"), || {
-                let mut t0 = self.x.get_value().get()?;
+                let mut t0 = self.x.value().get()?;
                 let mut t1 = t0.clone();
                 t0.sub_assign(&P::BaseField::one());
                 t1.add_assign(&P::BaseField::one());
@@ -130,11 +130,11 @@ mod montgomery_affine_impl {
             other: &Self,
         ) -> Result<Self, SynthesisError> {
             let lambda = F::alloc(cs.ns(|| "lambda"), || {
-                let mut n = other.y.get_value().get()?;
-                n.sub_assign(&self.y.get_value().get()?);
+                let mut n = other.y.value().get()?;
+                n.sub_assign(&self.y.value().get()?);
 
-                let mut d = other.x.get_value().get()?;
-                d.sub_assign(&self.x.get_value().get()?);
+                let mut d = other.x.value().get()?;
+                d.sub_assign(&self.x.value().get()?);
 
                 match d.inverse() {
                     Some(d) => {
@@ -151,10 +151,10 @@ mod montgomery_affine_impl {
             // Compute x'' = B*lambda^2 - A - x - x'
             let xprime = F::alloc(cs.ns(|| "xprime"), || {
                 Ok(
-                    lambda.get_value().get()?.square() * &P::MontgomeryModelParameters::COEFF_B
+                    lambda.value().get()?.square() * &P::MontgomeryModelParameters::COEFF_B
                         - &P::MontgomeryModelParameters::COEFF_A
-                        - &self.x.get_value().get()?
-                        - &other.x.get_value().get()?,
+                        - &self.x.value().get()?
+                        - &other.x.value().get()?,
                 )
             })?;
 
@@ -171,9 +171,9 @@ mod montgomery_affine_impl {
             lambda_b.mul_equals(cs.ns(|| "xprime equals"), &lambda, &xprime_lc)?;
 
             let yprime = F::alloc(cs.ns(|| "yprime"), || {
-                Ok(-(self.y.get_value().get()?
-                    + &(lambda.get_value().get()?
-                        * &(xprime.get_value().get()? - &self.x.get_value().get()?))))
+                Ok(-(self.y.value().get()?
+                    + &(lambda.value().get()?
+                        * &(xprime.value().get()? - &self.x.value().get()?))))
             })?;
 
             let xres = self.x.sub(cs.ns(|| "xres"), &xprime)?;
@@ -270,8 +270,8 @@ mod affine_impl {
         type Variable = (F::Variable, F::Variable);
 
         #[inline]
-        fn get_value(&self) -> Option<Self::Value> {
-            match (self.x.get_value(), self.y.get_value()) {
+        fn value(&self) -> Option<Self::Value> {
+            match (self.x.value(), self.y.value()) {
                 (Some(x), Some(y)) => Some(TEAffine::new(x, y)),
                 (..) => None,
             }
@@ -323,8 +323,8 @@ mod affine_impl {
 
             // Compute x3 = (v0 + v1) / (1 + v2)
             let x3 = F::alloc(&mut cs.ns(|| "x3"), || {
-                let t0 = v0.get_value().get()? + &v1.get_value().get()?;
-                let t1 = P::BaseField::one() + &v2.get_value().get()?;
+                let t0 = v0.value().get()? + &v1.value().get()?;
+                let t1 = P::BaseField::one() + &v2.value().get()?;
                 Ok(t0 * &t1.inverse().get()?)
             })?;
 
@@ -335,9 +335,8 @@ mod affine_impl {
 
             // Compute y3 = (U + a * v0 - v1) / (1 - v2)
             let y3 = F::alloc(&mut cs.ns(|| "y3"), || {
-                let t0 =
-                    u.get_value().get()? + &(a * &v0.get_value().get()?) - &v1.get_value().get()?;
-                let t1 = P::BaseField::one() - &v2.get_value().get()?;
+                let t0 = u.value().get()? + &(a * &v0.value().get()?) - &v1.value().get()?;
+                let t1 = P::BaseField::one() - &v2.value().get()?;
                 Ok(t0 * &t1.inverse().get()?)
             })?;
 
@@ -386,8 +385,8 @@ mod affine_impl {
 
             // Compute x3 = (v0 + v1) / (1 + v2)
             let x3 = F::alloc(&mut cs.ns(|| "x3"), || {
-                let t0 = v0.get_value().get()? + &v1.get_value().get()?;
-                let t1 = P::BaseField::one() + &v2.get_value().get()?;
+                let t0 = v0.value().get()? + &v1.value().get()?;
+                let t1 = P::BaseField::one() + &v2.value().get()?;
                 Ok(t0 * &t1.inverse().get()?)
             })?;
 
@@ -398,9 +397,8 @@ mod affine_impl {
 
             // Compute y3 = (U + a * v0 - v1) / (1 - v2)
             let y3 = F::alloc(&mut cs.ns(|| "y3"), || {
-                let t0 =
-                    u.get_value().get()? + &(a * &v0.get_value().get()?) - &v1.get_value().get()?;
-                let t1 = P::BaseField::one() - &v2.get_value().get()?;
+                let t0 = u.value().get()? + &(a * &v0.value().get()?) - &v1.value().get()?;
+                let t1 = P::BaseField::one() - &v2.value().get()?;
                 Ok(t0 * &t1.inverse().get()?)
             })?;
 
@@ -432,8 +430,8 @@ mod affine_impl {
 
             // Compute x3 = (2xy) / (ax^2 + y^2)
             let x3 = F::alloc(&mut cs.ns(|| "x3"), || {
-                let t0 = xy.get_value().get()?.double();
-                let t1 = a * &x2.get_value().get()? + &y2.get_value().get()?;
+                let t0 = xy.value().get()?.double();
+                let t1 = a * &x2.value().get()? + &y2.value().get()?;
                 Ok(t0 * &t1.inverse().get()?)
             })?;
 
@@ -444,9 +442,9 @@ mod affine_impl {
             // Compute y3 = (y^2 - ax^2) / (2 - ax^2 - y^2)
             let two = P::BaseField::one().double();
             let y3 = F::alloc(&mut cs.ns(|| "y3"), || {
-                let a_x2 = a * &x2.get_value().get()?;
-                let t0 = y2.get_value().get()? - &a_x2;
-                let t1 = two - &a_x2 - &y2.get_value().get()?;
+                let a_x2 = a * &x2.value().get()?;
+                let t0 = y2.value().get()? - &a_x2;
+                let t1 = two - &a_x2 - &y2.value().get()?;
                 Ok(t0 * &t1.inverse().get()?)
             })?;
             let y2_minus_a_x2 = y2.sub(cs.ns(|| "y^2 - ax^2"), &a_x2)?;
@@ -691,8 +689,8 @@ mod projective_impl {
         type Variable = (F::Variable, F::Variable);
 
         #[inline]
-        fn get_value(&self) -> Option<Self::Value> {
-            match (self.x.get_value(), self.y.get_value()) {
+        fn value(&self) -> Option<Self::Value> {
+            match (self.x.value(), self.y.value()) {
                 (Some(x), Some(y)) => Some(TEAffine::new(x, y).into()),
                 (..) => None,
             }
@@ -744,8 +742,8 @@ mod projective_impl {
 
             // Compute x3 = (v0 + v1) / (1 + v2)
             let x3 = F::alloc(&mut cs.ns(|| "x3"), || {
-                let t0 = v0.get_value().get()? + &v1.get_value().get()?;
-                let t1 = P::BaseField::one() + &v2.get_value().get()?;
+                let t0 = v0.value().get()? + &v1.value().get()?;
+                let t1 = P::BaseField::one() + &v2.value().get()?;
                 Ok(t0 * &t1.inverse().get()?)
             })?;
 
@@ -756,9 +754,8 @@ mod projective_impl {
 
             // Compute y3 = (U + a * v0 - v1) / (1 - v2)
             let y3 = F::alloc(&mut cs.ns(|| "y3"), || {
-                let t0 =
-                    u.get_value().get()? + &(a * &v0.get_value().get()?) - &v1.get_value().get()?;
-                let t1 = P::BaseField::one() - &v2.get_value().get()?;
+                let t0 = u.value().get()? + &(a * &v0.value().get()?) - &v1.value().get()?;
+                let t1 = P::BaseField::one() - &v2.value().get()?;
                 Ok(t0 * &t1.inverse().get()?)
             })?;
 
@@ -808,8 +805,8 @@ mod projective_impl {
 
             // Compute x3 = (v0 + v1) / (1 + v2)
             let x3 = F::alloc(&mut cs.ns(|| "x3"), || {
-                let t0 = v0.get_value().get()? + &v1.get_value().get()?;
-                let t1 = P::BaseField::one() + &v2.get_value().get()?;
+                let t0 = v0.value().get()? + &v1.value().get()?;
+                let t1 = P::BaseField::one() + &v2.value().get()?;
                 Ok(t0 * &t1.inverse().get()?)
             })?;
 
@@ -820,9 +817,8 @@ mod projective_impl {
 
             // Compute y3 = (U + a * v0 - v1) / (1 - v2)
             let y3 = F::alloc(&mut cs.ns(|| "y3"), || {
-                let t0 =
-                    u.get_value().get()? + &(a * &v0.get_value().get()?) - &v1.get_value().get()?;
-                let t1 = P::BaseField::one() - &v2.get_value().get()?;
+                let t0 = u.value().get()? + &(a * &v0.value().get()?) - &v1.value().get()?;
+                let t1 = P::BaseField::one() - &v2.value().get()?;
                 Ok(t0 * &t1.inverse().get()?)
             })?;
 
@@ -854,8 +850,8 @@ mod projective_impl {
 
             // Compute x3 = (2xy) / (ax^2 + y^2)
             let x3 = F::alloc(&mut cs.ns(|| "x3"), || {
-                let t0 = xy.get_value().get()?.double();
-                let t1 = a * &x2.get_value().get()? + &y2.get_value().get()?;
+                let t0 = xy.value().get()?.double();
+                let t1 = a * &x2.value().get()? + &y2.value().get()?;
                 Ok(t0 * &t1.inverse().get()?)
             })?;
 
@@ -866,9 +862,9 @@ mod projective_impl {
             // Compute y3 = (y^2 - ax^2) / (2 - ax^2 - y^2)
             let two = P::BaseField::one().double();
             let y3 = F::alloc(&mut cs.ns(|| "y3"), || {
-                let a_x2 = a * &x2.get_value().get()?;
-                let t0 = y2.get_value().get()? - &a_x2;
-                let t1 = two - &a_x2 - &y2.get_value().get()?;
+                let a_x2 = a * &x2.value().get()?;
+                let t0 = y2.value().get()? - &a_x2;
+                let t1 = two - &a_x2 - &y2.value().get()?;
                 Ok(t0 * &t1.inverse().get()?)
             })?;
             let y2_minus_a_x2 = y2.sub(cs.ns(|| "y^2 - ax^2"), &a_x2)?;
@@ -1470,8 +1466,8 @@ where
     let result = gadget_a
         .mul_bits(cs.ns(|| "mul_bits"), &zero, input.iter())
         .unwrap();
-    let gadget_value = result.get_value().expect("Gadget_result failed");
-    assert_eq!(native_result, gadget_value);
+    let gadvalue = result.value().expect("Gadget_result failed");
+    assert_eq!(native_result, gadvalue);
 
     assert!(cs.is_satisfied());
 

@@ -129,8 +129,8 @@ where
     );
 
     #[inline]
-    fn get_value(&self) -> Option<Fp4<P>> {
-        match (self.c0.get_value(), self.c1.get_value()) {
+    fn value(&self) -> Option<Fp4<P>> {
+        match (self.c0.value(), self.c1.value()) {
             (Some(c0), Some(c1)) => Some(Fp4::new(c0, c1)),
             (..) => None,
         }

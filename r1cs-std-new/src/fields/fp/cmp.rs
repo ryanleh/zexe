@@ -13,9 +13,8 @@ impl<F: PrimeField> FpGadget<F> {
     /// also be checked for equality, e.g. `a <= b` instead of `a < b`, set
     /// `should_also_check_quality` to `true`. This variant verifies `a` and `b`
     /// are `<= (p-1)/2`.
-    pub fn enforce_cmp<CS: ConstraintSystem<F>>(
+    pub fn enforce_cmp(
         &self,
-        mut cs: CS,
         b: &FpGadget<F>,
         ordering: Ordering,
         should_also_check_equality: bool,

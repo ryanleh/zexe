@@ -34,12 +34,12 @@ pub struct G1PreparedGadget<P: MNT6Parameters> {
 }
 
 impl<P: MNT6Parameters> G1PreparedGadget<P> {
-    pub fn get_value(&self) -> Option<G1Prepared<P>> {
+    pub fn value(&self) -> Option<G1Prepared<P>> {
         match (
-            self.x.get_value(),
-            self.y.get_value(),
-            self.x_twist.get_value(),
-            self.y_twist.get_value(),
+            self.x.value(),
+            self.y.value(),
+            self.x_twist.value(),
+            self.y_twist.value(),
         ) {
             (Some(x), Some(y), Some(x_twist), Some(y_twist)) => Some(G1Prepared {
                 x,
@@ -183,19 +183,19 @@ impl<P: MNT6Parameters> ToBytesGadget<P::Fp> for G2PreparedGadget<P> {
 }
 
 impl<P: MNT6Parameters> G2PreparedGadget<P> {
-    pub fn get_value(&self) -> Option<G2Prepared<P>> {
+    pub fn value(&self) -> Option<G2Prepared<P>> {
         match (
-            self.x.get_value(),
-            self.y.get_value(),
-            self.x_over_twist.get_value(),
-            self.y_over_twist.get_value(),
+            self.x.value(),
+            self.y.value(),
+            self.x_over_twist.value(),
+            self.y_over_twist.value(),
             self.double_coefficients
                 .iter()
-                .map(|coeff| coeff.get_value())
+                .map(|coeff| coeff.value())
                 .collect::<Option<Vec<AteDoubleCoefficients<P>>>>(),
             self.addition_coefficients
                 .iter()
-                .map(|coeff| coeff.get_value())
+                .map(|coeff| coeff.value())
                 .collect::<Option<Vec<AteAdditionCoefficients<P>>>>(),
         ) {
             (
@@ -352,12 +352,12 @@ impl<P: MNT6Parameters> ToBytesGadget<P::Fp> for AteDoubleCoefficientsGadget<P> 
 }
 
 impl<P: MNT6Parameters> AteDoubleCoefficientsGadget<P> {
-    pub fn get_value(&self) -> Option<AteDoubleCoefficients<P>> {
+    pub fn value(&self) -> Option<AteDoubleCoefficients<P>> {
         match (
-            self.c_h.get_value(),
-            self.c_4c.get_value(),
-            self.c_j.get_value(),
-            self.c_l.get_value(),
+            self.c_h.value(),
+            self.c_4c.value(),
+            self.c_j.value(),
+            self.c_l.value(),
         ) {
             (Some(c_h), Some(c_4c), Some(c_j), Some(c_l)) => Some(AteDoubleCoefficients {
                 c_h,
@@ -407,8 +407,8 @@ impl<P: MNT6Parameters> ToBytesGadget<P::Fp> for AteAdditionCoefficientsGadget<P
 }
 
 impl<P: MNT6Parameters> AteAdditionCoefficientsGadget<P> {
-    pub fn get_value(&self) -> Option<AteAdditionCoefficients<P>> {
-        match (self.c_l1.get_value(), self.c_rz.get_value()) {
+    pub fn value(&self) -> Option<AteAdditionCoefficients<P>> {
+        match (self.c_l1.value(), self.c_rz.value()) {
             (Some(c_l1), Some(c_rz)) => Some(AteAdditionCoefficients { c_l1, c_rz }),
             _ => None,
         }

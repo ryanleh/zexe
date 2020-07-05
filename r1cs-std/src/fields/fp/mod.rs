@@ -58,12 +58,12 @@ impl<F: PrimeField> FieldGadget<F, F> for FpGadget<F> {
     }
 
     #[inline]
-    fn get_variable(&self) -> Self::Variable {
-        self.variable.clone()
+    fn value(&self) -> Result<F, SynthesisError> {
+        self.value.ok_or(SynthesisError::AssignmentMissing)
     }
 
     #[inline]
-    fn zero<CS: ConstraintSystem<F>>(_cs: CS) -> Result<Self, SynthesisError> {
+    fn zero() -> Result<Self, SynthesisError> {
         let value = Some(F::zero());
         Ok(FpGadget {
             value,
@@ -72,7 +72,7 @@ impl<F: PrimeField> FieldGadget<F, F> for FpGadget<F> {
     }
 
     #[inline]
-    fn one<CS: ConstraintSystem<F>>(_cs: CS) -> Result<Self, SynthesisError> {
+    fn one() -> Result<Self, SynthesisError> {
         let value = Some(F::one());
         Ok(FpGadget {
             value,

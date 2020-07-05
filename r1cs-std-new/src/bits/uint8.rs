@@ -1,21 +1,34 @@
-use algebra::{Field, FpParameters, PrimeField, ToConstraintField};
+use algebra::Field;
+// use algebra::{FpParameters, PrimeField, ToConstraintField};
 
-use r1cs_core::{ConstraintSystem, SynthesisError};
+use r1cs_core::{ConstraintSystemRef, SynthesisError};
 
-use crate::{boolean::AllocatedBit, fields::fp::FpGadget, prelude::*, Assignment, Vec};
+use crate::{
+    boolean::AllocatedBit,
+    // fields::fp::FpGadget,
+    prelude::*,
+    Assignment,
+    Vec,
+};
 use core::borrow::Borrow;
 
 /// Represents an interpretation of 8 `Boolean` objects as an
 /// unsigned integer.
 #[derive(Clone, Debug)]
-pub struct UInt8 {
+pub struct UInt8<F: Field> {
     // Least significant bit_gadget first
-    pub(crate) bits: Vec<Boolean>,
+    pub(crate) bits: Vec<Boolean<F>>,
     pub(crate) value: Option<u8>,
 }
 
-impl UInt8 {
-    pub fn get_value(&self) -> Option<u8> {
+impl<F: Field> R1CSVar<F> for UInt8<F> {
+    fn cs(&self) -> Option<ConstraintSystemRef<F>> {
+        self.bits.as_slice().cs()
+    }
+}
+
+impl<F: Field> UInt8<F> {
+    pub fn value(&self) -> Option<u8> {
         self.value
     }
 
@@ -50,20 +63,14 @@ impl UInt8 {
         }
     }
 
-    pub fn alloc_vec<ConstraintF, CS, T>(
-        mut cs: CS,
-        values: &[T],
-    ) -> Result<Vec<Self>, SynthesisError>
-    where
-        ConstraintF: Field,
-        CS: ConstraintSystem<ConstraintF>,
-        T: Into<Option<u8>> + Copy,
-    {
+    pub fn alloc_witness_vec(
+        cs: ConstraintSystemRef<F>,
+        values: &[impl Into<Option<u8>> + Copy],
+    ) -> Result<Vec<Self>, SynthesisError> {
         let mut output_vec = Vec::with_capacity(values.len());
-        for (i, value) in values.iter().enumerate() {
+        for value in values {
             let byte: Option<u8> = Into::into(*value);
-            let alloc_byte = Self::alloc(&mut cs.ns(|| format!("byte_{}", i)), || byte.get())?;
-            output_vec.push(alloc_byte);
+            output_vec.push(Self::alloc_witness(cs.clone(), || byte.get())?);
         }
         Ok(output_vec)
     }
@@ -72,55 +79,49 @@ impl UInt8 {
     /// `ConstraintF` elements, (thus reducing the number of input allocations),
     /// and then converts this list of `ConstraintF` gadgets back into
     /// bytes.
-    pub fn alloc_input_vec<ConstraintF, CS>(
-        mut cs: CS,
-        values: &[u8],
-    ) -> Result<Vec<Self>, SynthesisError>
-    where
-        ConstraintF: PrimeField,
-        CS: ConstraintSystem<ConstraintF>,
-    {
-        let values_len = values.len();
-        let field_elements: Vec<ConstraintF> =
-            ToConstraintField::<ConstraintF>::to_field_elements(values).unwrap();
+    // pub fn alloc_input_vec(cs: ConstraintSystemRef<F>, values: &[u8]) -> Result<Vec<Self>, SynthesisError>
+    // where
+    //     F: PrimeField,
+    // {
+    //     let values_len = values.len();
+    //     let field_elements: Vec<F> =
+    //         ToConstraintField::<F>::to_field_elements(values).unwrap();
 
-        let max_size = 8 * (ConstraintF::Params::CAPACITY / 8) as usize;
-        let mut allocated_bits = Vec::new();
-        for (i, field_element) in field_elements.into_iter().enumerate() {
-            let fe = FpGadget::alloc_input(&mut cs.ns(|| format!("Field element {}", i)), || {
-                Ok(field_element)
-            })?;
-            let mut fe_bits = fe.to_bits(cs.ns(|| format!("Convert fe to bits {}", i)))?;
-            // FpGadget::to_bits outputs a big-endian binary representation of
-            // fe_gadget's value, so we have to reverse it to get the little-endian
-            // form.
-            fe_bits.reverse();
+    //     let max_size = 8 * (F::Params::CAPACITY / 8) as usize;
+    //     let mut allocated_bits = Vec::new();
+    //     for (i, field_element) in field_elements.into_iter().enumerate() {
+    //         let fe = FpGadget::alloc_input(cs.clone(), || Ok(field_element))?;
+    //         let mut fe_bits = fe.to_bits(cs.clone())?;
+    //         // FpGadget::to_bits outputs a big-endian binary representation of
+    //         // fe_gadget's value, so we have to reverse it to get the little-endian
+    //         // form.
+    //         fe_bits.reverse();
 
-            // Remove the most significant bit, because we know it should be zero
-            // because `values.to_field_elements()` only
-            // packs field elements up to the penultimate bit.
-            // That is, the most significant bit (`ConstraintF::NUM_BITS`-th bit) is
-            // unset, so we can just pop it off.
-            allocated_bits.extend_from_slice(&fe_bits[0..max_size]);
-        }
+    //         // Remove the most significant bit, because we know it should be zero
+    //         // because `values.to_field_elements()` only
+    //         // packs field elements up to the penultimate bit.
+    //         // That is, the most significant bit (`ConstraintF::NUM_BITS`-th bit) is
+    //         // unset, so we can just pop it off.
+    //         allocated_bits.extend_from_slice(&fe_bits[0..max_size]);
+    //     }
 
-        // Chunk up slices of 8 bit into bytes.
-        Ok(allocated_bits[0..8 * values_len]
-            .chunks(8)
-            .map(Self::from_bits_le)
-            .collect())
-    }
+    //     // Chunk up slices of 8 bit into bytes.
+    //     Ok(allocated_bits[0..8 * values_len]
+    //         .chunks(8)
+    //         .map(Self::from_bits_le)
+    //         .collect())
+    // }
 
     /// Turns this `UInt8` into its little-endian byte order representation.
     /// LSB-first means that we can easily get the corresponding field element
     /// via double and add.
-    pub fn into_bits_le(&self) -> Vec<Boolean> {
+    pub fn into_bits_le(&self) -> Vec<Boolean<F>> {
         self.bits.to_vec()
     }
 
     /// Converts a little-endian byte order representation of bits into a
     /// `UInt8`.
-    pub fn from_bits_le(bits: &[Boolean]) -> Self {
+    pub fn from_bits_le(bits: &[Boolean<F>]) -> Self {
         assert_eq!(bits.len(), 8);
 
         let bits = bits.to_vec();
@@ -131,23 +132,19 @@ impl UInt8 {
 
             match *b {
                 Boolean::Constant(b) => {
-                    if b {
-                        value.as_mut().map(|v| *v |= 1);
-                    }
+                    value.as_mut().map(|v| *v |= u8::from(b));
                 }
-                Boolean::Is(ref b) => match b.get_value() {
-                    Some(true) => {
-                        value.as_mut().map(|v| *v |= 1);
+                Boolean::Is(ref b) => match b.value() {
+                    Ok(b) => {
+                        value.as_mut().map(|v| *v |= u8::from(b));
                     }
-                    Some(false) => {}
-                    None => value = None,
+                    Err(_) => value = None,
                 },
-                Boolean::Not(ref b) => match b.get_value() {
-                    Some(false) => {
-                        value.as_mut().map(|v| *v |= 1);
+                Boolean::Not(ref b) => match b.value() {
+                    Ok(b) => {
+                        value.as_mut().map(|v| *v |= u8::from(!b));
                     }
-                    Some(true) => {}
-                    None => value = None,
+                    Err(_) => value = None,
                 },
             }
         }
@@ -156,11 +153,7 @@ impl UInt8 {
     }
 
     /// XOR this `UInt8` with another `UInt8`
-    pub fn xor<ConstraintF, CS>(&self, mut cs: CS, other: &Self) -> Result<Self, SynthesisError>
-    where
-        ConstraintF: Field,
-        CS: ConstraintSystem<ConstraintF>,
-    {
+    pub fn xor(&self, other: &Self) -> Result<Self, SynthesisError> {
         let new_value = match (self.value, other.value) {
             (Some(a), Some(b)) => Some(a ^ b),
             _ => None,
@@ -170,8 +163,7 @@ impl UInt8 {
             .bits
             .iter()
             .zip(other.bits.iter())
-            .enumerate()
-            .map(|(i, (a, b))| Boolean::xor(cs.ns(|| format!("xor of bit_gadget {}", i)), a, b))
+            .map(|(a, b)| a.xor(b))
             .collect::<Result<_, _>>()?;
 
         Ok(Self {
@@ -181,51 +173,39 @@ impl UInt8 {
     }
 }
 
-impl PartialEq for UInt8 {
-    fn eq(&self, other: &Self) -> bool {
-        self.value.is_some() && other.value.is_some() && self.value == other.value
+impl<ConstraintF: Field> EqGadget<ConstraintF> for UInt8<ConstraintF> {
+    fn is_eq(&self, other: &Self) -> Result<Boolean<ConstraintF>, SynthesisError> {
+        self.bits.as_slice().is_eq(&other.bits)
     }
-}
 
-impl Eq for UInt8 {}
-
-impl<ConstraintF: Field> ConditionalEqGadget<ConstraintF> for UInt8 {
-    fn conditional_enforce_equal<CS: ConstraintSystem<ConstraintF>>(
+    fn conditional_enforce_equal(
         &self,
-        mut cs: CS,
         other: &Self,
-        condition: &Boolean,
+        condition: &Boolean<ConstraintF>,
     ) -> Result<(), SynthesisError> {
-        for (i, (a, b)) in self.bits.iter().zip(&other.bits).enumerate() {
-            a.conditional_enforce_equal(
-                &mut cs.ns(|| format!("UInt8 equality check for {}-th bit", i)),
-                b,
-                condition,
-            )?;
-        }
-        Ok(())
+        self.bits.conditional_enforce_equal(&other.bits, condition)
     }
 
-    fn cost() -> usize {
-        8 * <Boolean as ConditionalEqGadget<ConstraintF>>::cost()
+    fn conditional_enforce_not_equal(
+        &self,
+        other: &Self,
+        condition: &Boolean<ConstraintF>,
+    ) -> Result<(), SynthesisError> {
+        self.bits
+            .conditional_enforce_not_equal(&other.bits, condition)
     }
 }
 
-impl<ConstraintF: Field> EqGadget<ConstraintF> for UInt8 {}
-
-impl<ConstraintF: Field> AllocGadget<u8, ConstraintF> for UInt8 {
-    fn alloc_constant<T, CS: ConstraintSystem<ConstraintF>>(
-        _cs: CS,
-        t: T,
-    ) -> Result<Self, SynthesisError>
-    where
-        T: Borrow<u8>,
-    {
+impl<ConstraintF: Field> AllocVar<u8, ConstraintF> for UInt8<ConstraintF> {
+    fn alloc_constant(
+        _: ConstraintSystemRef<ConstraintF>,
+        t: impl Borrow<u8>,
+    ) -> Result<Self, SynthesisError> {
         Ok(UInt8::constant(*t.borrow()))
     }
 
-    fn alloc<F, T, CS: ConstraintSystem<ConstraintF>>(
-        mut cs: CS,
+    fn alloc_witness_checked<F, T>(
+        cs: ConstraintSystemRef<ConstraintF>,
         value_gen: F,
     ) -> Result<Self, SynthesisError>
     where
@@ -249,12 +229,11 @@ impl<ConstraintF: Field> AllocGadget<u8, ConstraintF> for UInt8 {
 
         let bits = values
             .into_iter()
-            .enumerate()
-            .map(|(i, v)| {
-                Ok(Boolean::from(AllocatedBit::alloc(
-                    &mut cs.ns(|| format!("allocated bit_gadget {}", i)),
-                    || v.ok_or(SynthesisError::AssignmentMissing),
-                )?))
+            .map(|v| {
+                AllocatedBit::alloc_witness(cs.clone(), || {
+                    v.ok_or(SynthesisError::AssignmentMissing)
+                })
+                .map(From::from)
             })
             .collect::<Result<Vec<_>, SynthesisError>>()?;
 
@@ -264,8 +243,8 @@ impl<ConstraintF: Field> AllocGadget<u8, ConstraintF> for UInt8 {
         })
     }
 
-    fn alloc_input<F, T, CS: ConstraintSystem<ConstraintF>>(
-        mut cs: CS,
+    fn alloc_input_checked<F, T>(
+        cs: ConstraintSystemRef<ConstraintF>,
         value_gen: F,
     ) -> Result<Self, SynthesisError>
     where
@@ -288,12 +267,9 @@ impl<ConstraintF: Field> AllocGadget<u8, ConstraintF> for UInt8 {
 
         let bits = values
             .into_iter()
-            .enumerate()
-            .map(|(i, v)| {
-                Ok(Boolean::from(AllocatedBit::alloc_input(
-                    &mut cs.ns(|| format!("allocated bit_gadget {}", i)),
-                    || v.ok_or(SynthesisError::AssignmentMissing),
-                )?))
+            .map(|v| {
+                AllocatedBit::alloc_input(cs.clone(), || v.ok_or(SynthesisError::AssignmentMissing))
+                    .map(From::from)
             })
             .collect::<Result<Vec<_>, SynthesisError>>()?;
 
@@ -309,7 +285,6 @@ mod test {
     use super::UInt8;
     use crate::{prelude::*, test_constraint_system::TestConstraintSystem, Vec};
     use algebra::bls12_381::Fr;
-    use r1cs_core::ConstraintSystem;
     use rand::{Rng, SeedableRng};
     use rand_xorshift::XorShiftRng;
 
@@ -320,7 +295,7 @@ mod test {
         let byte = UInt8::alloc(cs.ns(|| "alloc value"), || Ok(byte_val)).unwrap();
         let bits = byte.into_bits_le();
         for (i, bit) in bits.iter().enumerate() {
-            assert_eq!(bit.get_value().unwrap(), (byte_val >> i) & 1 == 1)
+            assert_eq!(bit.value().unwrap(), (byte_val >> i) & 1 == 1)
         }
     }
 
@@ -332,7 +307,7 @@ mod test {
         for (native_byte, gadget_byte) in byte_vals.into_iter().zip(bytes) {
             let bits = gadget_byte.into_bits_le();
             for (i, bit) in bits.iter().enumerate() {
-                assert_eq!(bit.get_value().unwrap(), (native_byte >> i) & 1 == 1)
+                assert_eq!(bit.value().unwrap(), (native_byte >> i) & 1 == 1)
             }
         }
     }
@@ -396,10 +371,10 @@ mod test {
             for b in r.bits.iter() {
                 match b {
                     &Boolean::Is(ref b) => {
-                        assert!(b.get_value().unwrap() == (expected & 1 == 1));
+                        assert!(b.value().unwrap() == (expected & 1 == 1));
                     }
                     &Boolean::Not(ref b) => {
-                        assert!(!b.get_value().unwrap() == (expected & 1 == 1));
+                        assert!(!b.value().unwrap() == (expected & 1 == 1));
                     }
                     &Boolean::Constant(b) => {
                         assert!(b == (expected & 1 == 1));

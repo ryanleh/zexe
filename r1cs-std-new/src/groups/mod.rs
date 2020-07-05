@@ -22,7 +22,7 @@ pub trait GroupGadget<G: Group, ConstraintF: Field>:
     type Value: Debug;
     type Variable;
 
-    fn get_value(&self) -> Option<Self::Value>;
+    fn value(&self) -> Option<Self::Value>;
 
     fn get_variable(&self) -> Self::Variable;
 

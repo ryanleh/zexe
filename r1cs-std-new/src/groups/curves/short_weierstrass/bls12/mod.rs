@@ -31,8 +31,8 @@ pub type G2Gadget<P> =
 pub struct G1PreparedGadget<P: Bls12Parameters>(pub G1Gadget<P>);
 
 impl<P: Bls12Parameters> G1PreparedGadget<P> {
-    pub fn get_value(&self) -> Option<G1Prepared<P>> {
-        Some(G1Prepared::from(self.0.get_value().unwrap().into_affine()))
+    pub fn value(&self) -> Option<G1Prepared<P>> {
+        Some(G1Prepared::from(self.0.value().unwrap().into_affine()))
     }
 
     pub fn from_affine<CS: ConstraintSystem<P::Fp>>(

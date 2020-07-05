@@ -120,21 +120,9 @@ pub(crate) mod tests {
 
         assert_eq!(ans1_n, ans2_n, "Failed ans1_native == ans2_native");
         assert_eq!(ans2_n, ans3_n, "Failed ans2_native == ans3_native");
-        assert_eq!(
-            ans1_g.get_value(),
-            ans3_g.get_value(),
-            "Failed ans1 == ans3"
-        );
-        assert_eq!(
-            ans1_g.get_value(),
-            ans2_g.get_value(),
-            "Failed ans1 == ans2"
-        );
-        assert_eq!(
-            ans2_g.get_value(),
-            ans3_g.get_value(),
-            "Failed ans2 == ans3"
-        );
+        assert_eq!(ans1_g.value(), ans3_g.value(), "Failed ans1 == ans3");
+        assert_eq!(ans1_g.value(), ans2_g.value(), "Failed ans1 == ans2");
+        assert_eq!(ans2_g.value(), ans3_g.value(), "Failed ans2 == ans3");
 
         ans1_g
             .enforce_equal(&mut cs.ns(|| "ans1 == ans2?"), &ans2_g)
@@ -143,9 +131,9 @@ pub(crate) mod tests {
             .enforce_equal(&mut cs.ns(|| "ans2 == ans3?"), &ans3_g)
             .unwrap();
 
-        assert_eq!(ans1_g.get_value().unwrap(), ans1_n, "Failed native test 1");
-        assert_eq!(ans2_g.get_value().unwrap(), ans2_n, "Failed native test 2");
-        assert_eq!(ans3_g.get_value().unwrap(), ans3_n, "Failed native test 3");
+        assert_eq!(ans1_g.value().unwrap(), ans1_n, "Failed native test 1");
+        assert_eq!(ans2_g.value().unwrap(), ans2_n, "Failed native test 2");
+        assert_eq!(ans3_g.value().unwrap(), ans3_n, "Failed native test 3");
 
         if !cs.is_satisfied() {
             println!("Unsatisfied: {:?}", cs.which_is_unsatisfied());

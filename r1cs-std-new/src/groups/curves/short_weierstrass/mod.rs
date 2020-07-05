@@ -99,12 +99,8 @@ where
     type Variable = (F::Variable, F::Variable);
 
     #[inline]
-    fn get_value(&self) -> Option<Self::Value> {
-        match (
-            self.x.get_value(),
-            self.y.get_value(),
-            self.infinity.get_value(),
-        ) {
+    fn value(&self) -> Option<Self::Value> {
+        match (self.x.value(), self.y.value(), self.infinity.value()) {
             (Some(x), Some(y), Some(infinity)) => {
                 Some(SWAffine::new(x, y, infinity).into_projective())
             }
@@ -158,21 +154,21 @@ where
         let inv = x2_minus_x1.inverse(cs.ns(|| "compute inv"))?;
 
         let lambda = F::alloc(cs.ns(|| "lambda"), || {
-            Ok(y2_minus_y1.get_value().get()? * &inv.get_value().get()?)
+            Ok(y2_minus_y1.value().get()? * &inv.value().get()?)
         })?;
 
         let x_3 = F::alloc(&mut cs.ns(|| "x_3"), || {
-            let lambda_val = lambda.get_value().get()?;
-            let x1 = self.x.get_value().get()?;
-            let x2 = other.x.get_value().get()?;
+            let lambda_val = lambda.value().get()?;
+            let x1 = self.x.value().get()?;
+            let x2 = other.x.value().get()?;
             Ok((lambda_val.square() - &x1) - &x2)
         })?;
 
         let y_3 = F::alloc(&mut cs.ns(|| "y_3"), || {
-            let lambda_val = lambda.get_value().get()?;
-            let x_1 = self.x.get_value().get()?;
-            let y_1 = self.y.get_value().get()?;
-            let x_3 = x_3.get_value().get()?;
+            let lambda_val = lambda.value().get()?;
+            let x_1 = self.x.value().get()?;
+            let y_1 = self.y.value().get()?;
+            let x_3 = x_3.value().get()?;
             Ok(lambda_val * &(x_1 - &x_3) - &y_1)
         })?;
 
@@ -235,21 +231,21 @@ where
         let inv = x2_minus_x1.inverse(cs.ns(|| "compute inv"))?;
 
         let lambda = F::alloc(cs.ns(|| "lambda"), || {
-            Ok(y2_minus_y1.get_value().get()? * &inv.get_value().get()?)
+            Ok(y2_minus_y1.value().get()? * &inv.value().get()?)
         })?;
 
         let x_3 = F::alloc(&mut cs.ns(|| "x_3"), || {
-            let lambda_val = lambda.get_value().get()?;
-            let x1 = self.x.get_value().get()?;
+            let lambda_val = lambda.value().get()?;
+            let x1 = self.x.value().get()?;
             let x2 = other_x;
             Ok((lambda_val.square() - &x1) - &x2)
         })?;
 
         let y_3 = F::alloc(&mut cs.ns(|| "y_3"), || {
-            let lambda_val = lambda.get_value().get()?;
-            let x_1 = self.x.get_value().get()?;
-            let y_1 = self.y.get_value().get()?;
-            let x_3 = x_3.get_value().get()?;
+            let lambda_val = lambda.value().get()?;
+            let x_1 = self.x.value().get()?;
+            let y_1 = self.y.value().get()?;
+            let x_3 = x_3.value().get()?;
             Ok(lambda_val * &(x_1 - &x_3) - &y_1)
         })?;
 
@@ -289,8 +285,8 @@ where
         let two_y = self.y.double(cs.ns(|| "2y"))?;
 
         let lambda = F::alloc(cs.ns(|| "lambda"), || {
-            let y_doubled_inv = two_y.get_value().get()?.inverse().get()?;
-            Ok(three_x_squared_plus_a.get_value().get()? * &y_doubled_inv)
+            let y_doubled_inv = two_y.value().get()?.inverse().get()?;
+            Ok(three_x_squared_plus_a.value().get()? * &y_doubled_inv)
         })?;
 
         // Check lambda
@@ -705,10 +701,10 @@ where
     let b_affine = b.into_affine();
     let mut gadget_a = GG::alloc(&mut cs.ns(|| "a"), || Ok(a)).unwrap();
     let gadget_b = GG::alloc_checked(&mut cs.ns(|| "b"), || Ok(b)).unwrap();
-    assert_eq!(gadget_a.get_value().unwrap().x, a_affine.x);
-    assert_eq!(gadget_a.get_value().unwrap().y, a_affine.y);
-    assert_eq!(gadget_b.get_value().unwrap().x, b_affine.x);
-    assert_eq!(gadget_b.get_value().unwrap().y, b_affine.y);
+    assert_eq!(gadget_a.value().unwrap().x, a_affine.x);
+    assert_eq!(gadget_a.value().unwrap().y, a_affine.y);
+    assert_eq!(gadget_b.value().unwrap().x, b_affine.x);
+    assert_eq!(gadget_b.value().unwrap().y, b_affine.y);
 
     // Check addition
     let ab = a + &b;
@@ -720,7 +716,7 @@ where
         .unwrap();
 
     let ab_val = gadget_ab
-        .get_value()
+        .value()
         .expect("Doubling should be successful")
         .into_affine();
     assert_eq!(ab_val, ab_affine, "Result of addition is unequal");
@@ -730,7 +726,7 @@ where
     let aa_affine = aa.into_affine();
     gadget_a.double_in_place(&mut cs.ns(|| "2a")).unwrap();
     let aa_val = gadget_a
-        .get_value()
+        .value()
         .expect("Doubling should be successful")
         .into_affine();
     assert_eq!(
@@ -750,7 +746,7 @@ where
     let result = gadget_a
         .mul_bits(cs.ns(|| "mul_bits"), &gadget_b, input.iter())
         .unwrap();
-    let result_val = result.get_value().unwrap().into_affine();
+    let result_val = result.value().unwrap().into_affine();
     assert_eq!(
         result_val, native_result,
         "gadget & native values are diff. after scalar mul"

@@ -281,8 +281,8 @@ where
     );
 
     #[inline]
-    fn get_value(&self) -> Option<Fp12<P>> {
-        Some(Fp12::new(self.c0.get_value()?, self.c1.get_value()?))
+    fn value(&self) -> Option<Fp12<P>> {
+        Some(Fp12::new(self.c0.value()?, self.c1.value()?))
     }
 
     #[inline]
