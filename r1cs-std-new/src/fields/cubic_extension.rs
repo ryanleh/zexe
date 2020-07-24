@@ -636,3 +636,20 @@ where
         Ok(Self::new(c0, c1, c2))
     }
 }
+
+// impl<'a, AF, P> core::ops::Mul<P::BasePrimeField> for &'a AllocatedCubicExt<AF, P>
+// where
+//     AF: AllocatedField<P::BaseField>,
+//     for<'b> &'b AF: core::ops::Mul<P::BasePrimeField, Output = AF>,
+//     P: CubicExtParameters,
+// {
+//     type Output = AllocatedCubicExt<AF, P>;
+
+//     fn mul(self, other: P::BasePrimeField) -> Self::Output {
+//         let result = self.clone();
+//         result.c0 = &self.c0 * other;
+//         result.c1 = &self.c1 * other;
+//         result.c2 = &self.c2 * other;
+//         result
+//     }
+// }
