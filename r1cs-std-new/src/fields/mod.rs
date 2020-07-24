@@ -1,14 +1,20 @@
-use algebra::{Field, PrimeField};
-use core::fmt::Debug;
+use algebra::Field;
+use core::{
+    fmt::Debug,
+    ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign},
+};
 use r1cs_core::SynthesisError;
 
 use crate::{prelude::*, Assignment};
 
 #[macro_use]
+pub mod macros;
 pub mod fp;
-pub mod field_var;
+// pub mod field_var;
 // pub mod fp12;
-pub mod fp2;
+// pub mod fp2;
+pub mod cubic_extension;
+pub mod quadratic_extension;
 // pub mod fp3;
 // pub mod fp4;
 // pub mod fp6_2over3;
@@ -24,24 +30,53 @@ pub trait AllocatedField<F: Field>:
     + AllocVar<F, <Self as AllocatedField<F>>::ConstraintF>
     + ToBytesGadget<<Self as AllocatedField<F>>::ConstraintF>
     + CondSelectGadget<<Self as AllocatedField<F>>::ConstraintF>
+    + for<'a> Add<&'a Self, Output = Self>
+    + for<'a> Sub<&'a Self, Output = Self>
+    + for<'a> Mul<&'a Self, Output = Self>
+    + for<'a> AddAssign<&'a Self>
+    + for<'a> SubAssign<&'a Self>
+    + for<'a> MulAssign<&'a Self>
+    + Add<Self, Output = Self>
+    + Sub<Self, Output = Self>
+    + Mul<Self, Output = Self>
+    + AddAssign<Self>
+    + SubAssign<Self>
+    + MulAssign<Self>
+    + Add<F, Output = Self>
+    + Sub<F, Output = Self>
+    + Mul<F, Output = Self>
+    + AddAssign<F>
+    + SubAssign<F>
+    + MulAssign<F>
     + Debug
 {
     type ConstraintF: Field;
 
     fn value(&self) -> Result<F, SynthesisError>;
 
-    fn add(&self, other: &Self) -> Result<Self, SynthesisError>;
+    fn add(&self, other: &Self) -> Result<Self, SynthesisError> {
+        Ok(self.clone() + other)
+    }
 
-    fn sub(&self, other: &Self) -> Result<Self, SynthesisError>;
+    fn sub(&self, other: &Self) -> Result<Self, SynthesisError> {
+        Ok(self.clone() - other)
+    }
 
-    fn mul(&self, other: &Self) -> Result<Self, SynthesisError>;
+    fn mul(&self, other: &Self) -> Result<Self, SynthesisError> {
+        Ok(self.clone() * other)
+    }
 
-    fn add_constant(&self, other: F) -> Result<Self, SynthesisError>;
+    fn add_constant(&self, other: F) -> Result<Self, SynthesisError> {
+        Ok(self.clone() + other)
+    }
 
-    fn sub_constant(&self, other: F) -> Result<Self, SynthesisError>;
+    fn sub_constant(&self, other: F) -> Result<Self, SynthesisError> {
+        Ok(self.clone() - other)
+    }
 
-    fn mul_constant(&self, other: F) -> Result<Self, SynthesisError>;
-
+    fn mul_constant(&self, other: F) -> Result<Self, SynthesisError> {
+        Ok(self.clone() * other)
+    }
     fn double(&self) -> Result<Self, SynthesisError> {
         self.add(self)
     }
@@ -104,8 +139,6 @@ pub trait AllocatedField<F: Field>:
         Ok(self)
     }
 }
-
-pub trait AllocatedPrimeField<F: PrimeField>: AllocatedField<F> {}
 
 #[cfg(test)]
 pub(crate) mod tests {

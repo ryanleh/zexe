@@ -139,7 +139,7 @@ where
             (Constant(s), Constant(d)) => Ok(Constant(*s / *d)),
             (Var(s), Constant(d)) => s.mul_constant(d.inverse().get()?).map(Var),
             (Constant(s), Var(d)) => d.inverse()?.mul_constant(*s).map(Var),
-            (Var(s), Var(d)) => d.inverse()?.mul(s).map(Var),
+            (Var(s), Var(d)) => Ok(Var(d.inverse()?.mul(s))),
         }
     }
 

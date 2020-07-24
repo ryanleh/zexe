@@ -2,7 +2,6 @@ use algebra::{bytes::ToBytes, FpParameters, PrimeField};
 use r1cs_core::{lc, ConstraintSystemRef, LinearCombination, SynthesisError, Variable};
 
 use core::borrow::Borrow;
-use core::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
 
 use crate::fields::AllocatedField;
 use crate::{boolean::AllocatedBit, prelude::*, Assignment, Vec};
@@ -13,7 +12,7 @@ use crate::{boolean::AllocatedBit, prelude::*, Assignment, Vec};
 pub struct AllocatedFp<F: PrimeField> {
     pub value: Option<F>,
     pub variable: Variable,
-    cs: ConstraintSystemRef<F>,
+    pub cs: ConstraintSystemRef<F>,
 }
 
 impl<F: PrimeField> AllocatedFp<F> {
@@ -50,63 +49,6 @@ impl<F: PrimeField> AllocatedField<F> for AllocatedFp<F> {
         self.value.get()
     }
 
-    fn add(&self, other: &Self) -> Result<Self, SynthesisError> {
-        let value = match (self.value, other.value) {
-            (Some(val1), Some(val2)) => Some(val1 + &val2),
-            (..) => None,
-        };
-
-        let variable = self.cs.new_lc(lc!() + self.variable + other.variable);
-        Ok(AllocatedFp::new(value, variable, self.cs.clone()))
-    }
-
-    fn sub(&self, other: &Self) -> Result<Self, SynthesisError> {
-        let value = match (self.value, other.value) {
-            (Some(val1), Some(val2)) => Some(val1 - &val2),
-            (..) => None,
-        };
-
-        let variable = self.cs.new_lc(lc!() + self.variable - other.variable);
-        Ok(AllocatedFp::new(value, variable, self.cs.clone()))
-    }
-
-    fn mul(&self, other: &Self) -> Result<Self, SynthesisError> {
-        let product = AllocatedFp::alloc_witness(self.cs.clone(), || {
-            Ok(self.value.get()? * &other.value.get()?)
-        })
-        .unwrap();
-        self.cs
-            .enforce_constraint(
-                lc!() + self.variable,
-                lc!() + other.variable,
-                lc!() + product.variable,
-            )
-            .unwrap();
-        Ok(product)
-    }
-
-    fn add_constant(&self, other: F) -> Result<Self, SynthesisError> {
-        let value = self.value.map(|val| val + other);
-        let variable = self
-            .cs
-            .new_lc(lc!() + self.variable + (other, Variable::One));
-        Ok(AllocatedFp::new(value, variable, self.cs.clone()))
-    }
-
-    fn sub_constant(&self, other: F) -> Result<Self, SynthesisError> {
-        let value = self.value.map(|val| val - other);
-        let variable = self
-            .cs
-            .new_lc(lc!() + self.variable - (other, Variable::One));
-        Ok(AllocatedFp::new(value, variable, self.cs.clone()))
-    }
-
-    fn mul_constant(&self, other: F) -> Result<Self, SynthesisError> {
-        let value = self.value.map(|val| val * other);
-        let variable = self.cs.new_lc(lc!() + (other, self.variable));
-        Ok(AllocatedFp::new(value, variable, self.cs.clone()))
-    }
-
     fn double(&self) -> Result<Self, SynthesisError> {
         let value = self.value.map(|val| val.double());
         let variable = self.cs.new_lc(lc!() + self.variable + self.variable);
@@ -129,12 +71,8 @@ impl<F: PrimeField> AllocatedField<F> for AllocatedFp<F> {
 
     #[inline]
     fn inverse(&self) -> Result<Self, SynthesisError> {
-        let inverse = Self::alloc_witness(self.cs.clone(), || {
-            self.value
-                .get()?
-                .inverse()
-                .ok_or(SynthesisError::AssignmentMissing)
-        })?;
+        let inverse =
+            Self::alloc_witness(self.cs().get()?.clone(), || self.value()?.inverse().get())?;
 
         self.cs.enforce_constraint(
             lc!() + self.variable,
@@ -169,104 +107,89 @@ impl<F: PrimeField> AllocatedField<F> for AllocatedFp<F> {
     }
 }
 
-/****************************************************************************/
-/****************************************************************************/
+impl_ops!(
+    AllocatedFp<F>,
+    F,
+    Add,
+    add,
+    AddAssign,
+    add_assign,
+    add_constant,
+    |this: &'a AllocatedFp<F>, other: &'a AllocatedFp<F>| {
+        let value = match (this.value, other.value) {
+            (Some(val1), Some(val2)) => Some(val1 + &val2),
+            (..) => None,
+        };
 
-impl<'a, F: PrimeField> Add<&'a AllocatedFp<F>> for &'a AllocatedFp<F> {
-    type Output = AllocatedFp<F>;
+        let variable = this.cs.new_lc(lc!() + this.variable + other.variable);
+        AllocatedFp::new(value, variable, this.cs.clone())
+    },
+    |this: &'a AllocatedFp<F>, other: F| {
+        let value = this.value.map(|val| val + other);
+        let variable = this
+            .cs
+            .new_lc(lc!() + this.variable + (other, Variable::One));
+        AllocatedFp::new(value, variable, this.cs.clone())
+    },
+    F: PrimeField
+);
 
-    fn add(self, other: Self) -> AllocatedFp<F> {
-        AllocatedField::add(self, other).unwrap()
-    }
-}
+impl_ops!(
+    AllocatedFp<F>,
+    F,
+    Sub,
+    sub,
+    SubAssign,
+    sub_assign,
+    sub_constant,
+    |this: &'a AllocatedFp<F>, other: &'a AllocatedFp<F>| {
+        let value = match (this.value, other.value) {
+            (Some(val1), Some(val2)) => Some(val1 - &val2),
+            (..) => None,
+        };
 
-impl<'a, F: PrimeField> Sub<&'a AllocatedFp<F>> for &'a AllocatedFp<F> {
-    type Output = AllocatedFp<F>;
+        let variable = this.cs.new_lc(lc!() + this.variable - other.variable);
+        AllocatedFp::new(value, variable, this.cs.clone())
+    },
+    |this: &'a AllocatedFp<F>, other: F| {
+        let value = this.value.map(|val| val - other);
+        let variable = this
+            .cs
+            .new_lc(lc!() + this.variable - (other, Variable::One));
+        AllocatedFp::new(value, variable, this.cs.clone())
+    },
+    F: PrimeField
+);
 
-    fn sub(self, other: Self) -> AllocatedFp<F> {
-        AllocatedField::sub(self, other).unwrap()
-    }
-}
-
-impl<'a, F: PrimeField> Mul<&'a AllocatedFp<F>> for &'a AllocatedFp<F> {
-    type Output = AllocatedFp<F>;
-
-    fn mul(self, other: Self) -> AllocatedFp<F> {
-        AllocatedField::mul(self, other).unwrap()
-    }
-}
-
-impl<'a, F: PrimeField> AddAssign<&'a AllocatedFp<F>> for AllocatedFp<F> {
-    fn add_assign(&mut self, other: &'a Self) {
-        let result = &*self + other;
-        *self = result
-    }
-}
-
-impl<'a, F: PrimeField> SubAssign<&'a AllocatedFp<F>> for AllocatedFp<F> {
-    fn sub_assign(&mut self, other: &'a Self) {
-        let result = &*self - other;
-        *self = result
-    }
-}
-
-impl<'a, F: PrimeField> MulAssign<&'a AllocatedFp<F>> for AllocatedFp<F> {
-    fn mul_assign(&mut self, other: &'a Self) {
-        let result = &*self - other;
-        *self = result
-    }
-}
-
-/****************************************************************************/
-/****************************************************************************/
-
-impl<'a, F: PrimeField> Add<F> for &'a AllocatedFp<F> {
-    type Output = AllocatedFp<F>;
-
-    fn add(self, other: F) -> AllocatedFp<F> {
-        self.add_constant(other).unwrap()
-    }
-}
-
-impl<'a, F: PrimeField> Sub<F> for &'a AllocatedFp<F> {
-    type Output = AllocatedFp<F>;
-
-    fn sub(self, other: F) -> AllocatedFp<F> {
-        self.sub_constant(other).unwrap()
-    }
-}
-
-impl<'a, F: PrimeField> Mul<F> for &'a AllocatedFp<F> {
-    type Output = AllocatedFp<F>;
-
-    fn mul(self, other: F) -> AllocatedFp<F> {
-        self.mul_constant(other).unwrap()
-    }
-}
-
-impl<F: PrimeField> AddAssign<F> for AllocatedFp<F> {
-    fn add_assign(&mut self, other: F) {
-        let result = &*self + other;
-        *self = result
-    }
-}
-
-impl<F: PrimeField> SubAssign<F> for AllocatedFp<F> {
-    fn sub_assign(&mut self, other: F) {
-        let result = &*self - other;
-        *self = result
-    }
-}
-
-impl<F: PrimeField> MulAssign<F> for AllocatedFp<F> {
-    fn mul_assign(&mut self, other: F) {
-        let result = &*self - other;
-        *self = result
-    }
-}
-
-/****************************************************************************/
-/****************************************************************************/
+impl_ops!(
+    AllocatedFp<F>,
+    F,
+    Mul,
+    mul,
+    MulAssign,
+    mul_assign,
+    mul_constant,
+    |this: &'a AllocatedFp<F>, other: &'a AllocatedFp<F>| {
+        let product = AllocatedFp::alloc_witness(this.cs.clone(), || {
+            Ok(this.value.get()? * &other.value.get()?)
+        })
+        .unwrap();
+        this.cs
+            .enforce_constraint(
+                lc!() + this.variable,
+                lc!() + other.variable,
+                lc!() + product.variable,
+            )
+            .unwrap();
+        product
+    },
+    |this: &'a AllocatedFp<F>, other: F| {
+        let value = this.value.map(|val| val * other);
+        let variable = this.cs.new_lc(lc!() + (other, this.variable));
+        AllocatedFp::new(value, variable, this.cs.clone())
+    },
+    F: PrimeField
+);
 
 /****************************************************************************/
 /****************************************************************************/

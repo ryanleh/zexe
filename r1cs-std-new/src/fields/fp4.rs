@@ -1,120 +1,40 @@
-use algebra::{
-    fields::{Fp2, Fp2Parameters, Fp4, Fp4Parameters},
-    BigInteger, PrimeField,
-};
-use core::{borrow::Borrow, marker::PhantomData};
-use r1cs_core::{ConstraintSystem, SynthesisError};
+use crate::fields::{fp2::AllocatedFp2, quadratic_extension::AllocatedQuadExt};
+use algebra::fields::{Fp4Parameters, Fp4ParamsWrapper};
 
-use crate::{prelude::*, Vec};
+pub type AllocatedFp4<P> =
+    AllocatedQuadExt<AllocatedFp2<<P as Fp4Parameters>::Fp2Params>, Fp4ParamsWrapper<P>>;
 
-type Fp2Gadget<P, ConstraintF> =
-    super::fp2::Fp2Gadget<<P as Fp4Parameters>::Fp2Params, ConstraintF>;
-type Fp2GadgetVariable<P, ConstraintF> = <Fp2Gadget<P, ConstraintF> as FieldGadget<
-    Fp2<<P as Fp4Parameters>::Fp2Params>,
-    ConstraintF,
->>::Variable;
-
-#[derive(Derivative)]
-#[derivative(Debug(bound = "ConstraintF: PrimeField"))]
-#[must_use]
-pub struct Fp4Gadget<P, ConstraintF: PrimeField>
-where
-    P: Fp4Parameters,
-    P::Fp2Params: Fp2Parameters<Fp = ConstraintF>,
-{
-    pub c0: Fp2Gadget<P, ConstraintF>,
-    pub c1: Fp2Gadget<P, ConstraintF>,
-    #[derivative(Debug = "ignore")]
-    _params: PhantomData<P>,
-}
-
-impl<P, ConstraintF: PrimeField> Fp4Gadget<P, ConstraintF>
-where
-    P: Fp4Parameters,
-    P::Fp2Params: Fp2Parameters<Fp = ConstraintF>,
-{
-    pub fn new(c0: Fp2Gadget<P, ConstraintF>, c1: Fp2Gadget<P, ConstraintF>) -> Self {
-        Self {
-            c0,
-            c1,
-            _params: PhantomData,
-        }
-    }
-
+impl<P: Fp4Parameters> AllocatedFp4<P> {
     /// Multiply a Fp2Gadget by quadratic nonresidue P::NONRESIDUE.
     #[inline]
-    pub fn mul_fp2_gadget_by_nonresidue<CS: ConstraintSystem<ConstraintF>>(
-        cs: CS,
-        fe: &Fp2Gadget<P, ConstraintF>,
-    ) -> Result<Fp2Gadget<P, ConstraintF>, SynthesisError> {
-        let new_c0 = Fp2Gadget::<P, ConstraintF>::mul_fp_gadget_by_nonresidue(cs, &fe.c1)?;
+    pub fn mul_fp2_by_nonresidue(
+        fe: &AllocatedFp2<P::Fp2Params>,
+    ) -> Result<AllocatedFp2<P::Fp2Params>, SynthesisError> {
+        let new_c0 = AllcoatedFp2::mul_base_field_by_nonresidue(&fe.c1)?;
         let new_c1 = fe.c0.clone();
-        Ok(Fp2Gadget::<P, ConstraintF>::new(new_c0, new_c1))
+        Ok(Fp2Gadget::new(new_c0, new_c1))
     }
 
     /// Multiply a Fp4Gadget by an element of fp.
     #[inline]
-    pub fn mul_by_fp_constant_in_place<CS: ConstraintSystem<ConstraintF>>(
+    pub fn mul_by_fp_constant_in_place(
         &mut self,
-        mut cs: CS,
-        fe: &<<P as Fp4Parameters>::Fp2Params as Fp2Parameters>::Fp,
+        fe: &<P::Fp2Params as Fp2Parameters>::Fp,
     ) -> Result<&mut Self, SynthesisError> {
-        self.c0.mul_by_fp_constant_in_place(cs.ns(|| "c0"), fe)?;
-        self.c1.mul_by_fp_constant_in_place(cs.ns(|| "c1"), fe)?;
+        self.c0.mul_assign_by_base_field_constant(fe)?;
+        self.c1.mul_assign_by_base_field_constant(fe)?;
         Ok(self)
     }
 
     /// Multiply a Fp4Gadget by an element of fp.
     #[inline]
-    pub fn mul_by_fp_constant<CS: ConstraintSystem<ConstraintF>>(
+    pub fn mul_by_fp_constant(
         &self,
-        cs: CS,
-        fe: &<<P as Fp4Parameters>::Fp2Params as Fp2Parameters>::Fp,
+        fe: &<P::Fp2Params as Fp2Parameters>::Fp,
     ) -> Result<Self, SynthesisError> {
         let mut result = self.clone();
-        result.mul_by_fp_constant_in_place(cs, fe)?;
+        result.mul_by_fp_constant_in_place(fe)?;
         Ok(result)
-    }
-
-    pub fn unitary_inverse<CS: ConstraintSystem<ConstraintF>>(
-        &self,
-        cs: CS,
-    ) -> Result<Self, SynthesisError> {
-        Ok(Self::new(self.c0.clone(), self.c1.negate(cs)?))
-    }
-
-    #[inline]
-    pub fn cyclotomic_exp<CS: ConstraintSystem<ConstraintF>, B: BigInteger>(
-        &self,
-        mut cs: CS,
-        exponent: &B,
-    ) -> Result<Self, SynthesisError> {
-        let mut res = Self::one(cs.ns(|| "one"))?;
-        let self_inverse = self.unitary_inverse(cs.ns(|| "unitary inverse"))?;
-
-        let mut found_nonzero = false;
-        let naf = exponent.find_wnaf();
-
-        for (i, &value) in naf.iter().rev().enumerate() {
-            if found_nonzero {
-                res.square_in_place(cs.ns(|| format!("square {}", i)))?;
-            }
-
-            if value != 0 {
-                found_nonzero = true;
-
-                if value > 0 {
-                    res.mul_in_place(cs.ns(|| format!("res *= self {}", i)), &self)?;
-                } else {
-                    res.mul_in_place(
-                        cs.ns(|| format!("res *= self_inverse {}", i)),
-                        &self_inverse,
-                    )?;
-                }
-            }
-        }
-
-        Ok(res)
     }
 }
 
