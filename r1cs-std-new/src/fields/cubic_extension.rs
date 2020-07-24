@@ -178,7 +178,7 @@ where
         // Check c0
         let nr_a1_plus_a2 = (&self.c1 + &self.c2) * P::NONRESIDUE;
         let b1_plus_b2 = &other.c1 + &other.c2;
-        let nr_v1 = &v1 * &P::NONRESIDUE;
+        let nr_v1 = &v1 * P::NONRESIDUE;
         let nr_v2 = &v2 * P::NONRESIDUE;
         let to_check = &result.c0 - &v0 + &nr_v1 + &nr_v2;
         nr_a1_plus_a2.mul_equals(&b1_plus_b2, &to_check)?;
