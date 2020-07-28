@@ -215,7 +215,7 @@ macro_rules! make_uint {
                     let mut i = 0;
                     while max_value != 0 {
                         // Allocate the bit_gadget
-                        let b = AllocatedBit::alloc_witness(cs.clone(), || {
+                        let b = AllocatedBit::new_witness(cs.clone(), || {
                             result_value.map(|v| (v >> i) & 1 == 1).get()
                         })?;
 
@@ -278,85 +278,20 @@ macro_rules! make_uint {
             }
 
             impl<ConstraintF: Field> AllocVar<$native, ConstraintF> for $name<ConstraintF> {
-                fn alloc_constant(
-                    _: ConstraintSystemRef<ConstraintF>,
-                    t: impl Borrow<$native>,
+                fn new_variable<T: Borrow<$native>>(
+                    cs: ConstraintSystemRef<ConstraintF>,
+                    f: impl FnOnce() -> Result<T, SynthesisError>,
+                    mode: AllocationMode,
                 ) -> Result<Self, SynthesisError> {
-                    Ok($name::constant(*t.borrow()))
-                }
-
-                fn alloc_witness_checked<F, T>(
-                    cs: ConstraintSystemRef<ConstraintF>,
-                    value_gen: F,
-                ) -> Result<Self, SynthesisError>
-                where
-                    F: FnOnce() -> Result<T, SynthesisError>,
-                    T: Borrow<$native>,
-                {
-                    let value = value_gen().map(|val| *val.borrow());
+                    let value = f().map(|f| *f.borrow());
                     let values = match value {
-                        Ok(mut val) => {
-                            let mut v = Vec::with_capacity($size);
-
-                            for _ in 0..$size {
-                                v.push(Some(val & 1 == 1));
-                                val >>= 1;
-                            }
-
-                            v
-                        }
+                        Ok(val) => (0..$size).map(|i| Some((val >> i) & 1 == 1)).collect(),
                         _ => vec![None; $size],
                     };
-
                     let bits = values
                         .into_iter()
-                        .map(|v| {
-                            Ok(Boolean::from(AllocatedBit::alloc_witness_checked(
-                                cs.clone(),
-                                || v.ok_or(SynthesisError::AssignmentMissing),
-                            )?))
-                        })
-                        .collect::<Result<Vec<_>, SynthesisError>>()?;
-
-                    Ok(Self {
-                        bits,
-                        value: value.ok(),
-                    })
-                }
-
-                fn alloc_input_checked<F, T>(
-                    cs: ConstraintSystemRef<ConstraintF>,
-                    value_gen: F,
-                ) -> Result<Self, SynthesisError>
-                where
-                    F: FnOnce() -> Result<T, SynthesisError>,
-                    T: Borrow<$native>,
-                {
-                    let value = value_gen().map(|val| *val.borrow());
-                    let values = match value {
-                        Ok(mut val) => {
-                            let mut v = Vec::with_capacity($size);
-
-                            for _ in 0..$size {
-                                v.push(Some(val & 1 == 1));
-                                val >>= 1;
-                            }
-
-                            v
-                        }
-                        _ => vec![None; $size],
-                    };
-
-                    let bits = values
-                        .into_iter()
-                        .map(|v| {
-                            Ok(Boolean::from(AllocatedBit::alloc_input_checked(
-                                cs.clone(),
-                                || v.ok_or(SynthesisError::AssignmentMissing),
-                            )?))
-                        })
-                        .collect::<Result<Vec<_>, SynthesisError>>()?;
-
+                        .map(|v| Boolean::new_variable(cs.clone(), || v.get(), mode))
+                        .collect::<Result<Vec<_>, _>>()?;
                     Ok(Self {
                         bits,
                         value: value.ok(),
@@ -420,9 +355,9 @@ macro_rules! make_uint {
 
                         let mut expected = a ^ b ^ c;
 
-                        let a_bit = $name::alloc_witness(cs.clone(), Some(a)).unwrap();
+                        let a_bit = $name::new_witness(cs.clone(), Some(a)).unwrap();
                         let b_bit = $name::constant(b);
-                        let c_bit = $name::alloc_witness(cs.clone(), Some(c)).unwrap();
+                        let c_bit = $name::new_witness(cs.clone(), Some(c)).unwrap();
 
                         let r = a_bit.xor(&b_bit).unwrap();
                         let r = r.xor(&c_bit).unwrap();
@@ -500,10 +435,10 @@ macro_rules! make_uint {
 
                         let mut expected = (a ^ b).wrapping_add(c).wrapping_add(d);
 
-                        let a_bit = $name::alloc_witness(cs.ns(|| "a_bit"), Some(a)).unwrap();
+                        let a_bit = $name::new_witness(cs.ns(|| "a_bit"), Some(a)).unwrap();
                         let b_bit = $name::constant(b);
                         let c_bit = $name::constant(c);
-                        let d_bit = $name::alloc_witness(cs.ns(|| "d_bit"), Some(d)).unwrap();
+                        let d_bit = $name::new_witness(cs.ns(|| "d_bit"), Some(d)).unwrap();
 
                         let r = a_bit.xor(&b_bit).unwrap();
                         let r = $name::addmany(&[r, c_bit, d_bit]).unwrap();

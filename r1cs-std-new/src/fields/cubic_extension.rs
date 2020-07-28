@@ -76,8 +76,8 @@ where
     fn from(other: Boolean<AF::ConstraintF>) -> Self {
         if let Some(cs) = other.cs() {
             let c0 = AF::from(other);
-            let c1 = AF::alloc_constant(cs.clone(), P::BaseField::zero()).unwrap();
-            let c2 = AF::alloc_constant(cs, P::BaseField::zero()).unwrap();
+            let c1 = AF::new_constant(cs.clone(), P::BaseField::zero()).unwrap();
+            let c2 = AF::new_constant(cs, P::BaseField::zero()).unwrap();
             Self::new(c0, c1, c2)
         } else {
             unreachable!("Cannot create a constant value")
@@ -212,8 +212,8 @@ where
 
     fn inverse(&self) -> Result<Self, SynthesisError> {
         let cs = self.cs().get()?.clone();
-        let one = Self::alloc_constant(cs.clone(), CubicExtField::one())?;
-        let inverse = Self::alloc_witness(cs, || self.value().and_then(|v| v.inverse().get()))?;
+        let one = Self::new_constant(cs.clone(), CubicExtField::one())?;
+        let inverse = Self::new_witness(cs, || self.value().and_then(|v| v.inverse().get()))?;
         self.mul_equals(&inverse, &one)?;
         Ok(inverse)
     }
@@ -493,86 +493,24 @@ where
     AF: AllocatedField<P::BaseField>,
     P: AllocatedCubicExtParams<AF>,
 {
-    #[inline]
-    fn alloc_constant(
+    fn new_variable<T: Borrow<CubicExtField<P>>>(
         cs: ConstraintSystemRef<AF::ConstraintF>,
-        t: impl Borrow<CubicExtField<P>>,
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+        mode: AllocationMode,
     ) -> Result<Self, SynthesisError> {
-        let t = *t.borrow();
-        let c0 = AF::alloc_constant(cs.clone(), t.c0)?;
-        let c1 = AF::alloc_constant(cs.clone(), t.c1)?;
-        let c2 = AF::alloc_constant(cs, t.c2)?;
-        Ok(Self::new(c0, c1, c2))
-    }
-
-    #[inline]
-    fn alloc_witness_checked<FN, T>(
-        cs: ConstraintSystemRef<AF::ConstraintF>,
-        value_gen: FN,
-    ) -> Result<Self, SynthesisError>
-    where
-        FN: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<CubicExtField<P>>,
-    {
-        let (c0, c1, c2) = match value_gen() {
-            Ok(fe) => {
-                let fe = *fe.borrow();
-                (Ok(fe.c0), Ok(fe.c1), Ok(fe.c2))
-            }
+        use SynthesisError::*;
+        let (c0, c1, c2) = match f() {
+            Ok(fe) => (Ok(fe.borrow().c0), Ok(fe.borrow().c1), Ok(fe.borrow().c2)),
             Err(_) => (
-                Err(SynthesisError::AssignmentMissing),
-                Err(SynthesisError::AssignmentMissing),
-                Err(SynthesisError::AssignmentMissing),
+                Err(AssignmentMissing),
+                Err(AssignmentMissing),
+                Err(AssignmentMissing),
             ),
         };
 
-        let c0 = AF::alloc_witness_checked(cs.clone(), || c0)?;
-        let c1 = AF::alloc_witness_checked(cs.clone(), || c1)?;
-        let c2 = AF::alloc_witness_checked(cs, || c2)?;
-        Ok(Self::new(c0, c1, c2))
-    }
-
-    #[inline]
-    fn alloc_input_checked<FN, T>(
-        cs: ConstraintSystemRef<AF::ConstraintF>,
-        value_gen: FN,
-    ) -> Result<Self, SynthesisError>
-    where
-        FN: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<CubicExtField<P>>,
-    {
-        let (c0, c1, c2) = match value_gen() {
-            Ok(fe) => {
-                let fe = *fe.borrow();
-                (Ok(fe.c0), Ok(fe.c1), Ok(fe.c2))
-            }
-            Err(_) => (
-                Err(SynthesisError::AssignmentMissing),
-                Err(SynthesisError::AssignmentMissing),
-                Err(SynthesisError::AssignmentMissing),
-            ),
-        };
-
-        let c0 = AF::alloc_input_checked(cs.clone(), || c0)?;
-        let c1 = AF::alloc_input_checked(cs.clone(), || c1)?;
-        let c2 = AF::alloc_input_checked(cs, || c2)?;
+        let c0 = AF::new_variable(cs.clone(), || c0, mode)?;
+        let c1 = AF::new_variable(cs.clone(), || c1, mode)?;
+        let c2 = AF::new_variable(cs.clone(), || c2, mode)?;
         Ok(Self::new(c0, c1, c2))
     }
 }
-
-// impl<'a, AF, P> core::ops::Mul<P::BasePrimeField> for &'a AllocatedCubicExt<AF, P>
-// where
-//     AF: AllocatedField<P::BaseField>,
-//     for<'b> &'b AF: core::ops::Mul<P::BasePrimeField, Output = AF>,
-//     P: AllocatedCubicExtParams<AF>,
-// {
-//     type Output = AllocatedCubicExt<AF, P>;
-
-//     fn mul(self, other: P::BasePrimeField) -> Self::Output {
-//         let result = self.clone();
-//         result.c0 = &self.c0 * other;
-//         result.c1 = &self.c1 * other;
-//         result.c2 = &self.c2 * other;
-//         result
-//     }
-// }

@@ -4,7 +4,6 @@ use algebra::Field;
 use r1cs_core::{ConstraintSystemRef, SynthesisError};
 
 use crate::{
-    boolean::AllocatedBit,
     // fields::fp::FpGadget,
     prelude::*,
     Assignment,
@@ -63,14 +62,14 @@ impl<F: Field> UInt8<F> {
         }
     }
 
-    pub fn alloc_witness_vec(
+    pub fn new_witness_vec(
         cs: ConstraintSystemRef<F>,
         values: &[impl Into<Option<u8>> + Copy],
     ) -> Result<Vec<Self>, SynthesisError> {
         let mut output_vec = Vec::with_capacity(values.len());
         for value in values {
             let byte: Option<u8> = Into::into(*value);
-            output_vec.push(Self::alloc_witness(cs.clone(), || byte.get())?);
+            output_vec.push(Self::new_witness(cs.clone(), || byte.get())?);
         }
         Ok(output_vec)
     }
@@ -79,7 +78,7 @@ impl<F: Field> UInt8<F> {
     /// `ConstraintF` elements, (thus reducing the number of input allocations),
     /// and then converts this list of `ConstraintF` gadgets back into
     /// bytes.
-    // pub fn alloc_input_vec(cs: ConstraintSystemRef<F>, values: &[u8]) -> Result<Vec<Self>, SynthesisError>
+    // pub fn new_input_vec(cs: ConstraintSystemRef<F>, values: &[u8]) -> Result<Vec<Self>, SynthesisError>
     // where
     //     F: PrimeField,
     // {
@@ -90,7 +89,7 @@ impl<F: Field> UInt8<F> {
     //     let max_size = 8 * (F::Params::CAPACITY / 8) as usize;
     //     let mut allocated_bits = Vec::new();
     //     for (i, field_element) in field_elements.into_iter().enumerate() {
-    //         let fe = FpGadget::alloc_input(cs.clone(), || Ok(field_element))?;
+    //         let fe = FpGadget::new_input(cs.clone(), || Ok(field_element))?;
     //         let mut fe_bits = fe.to_bits(cs.clone())?;
     //         // FpGadget::to_bits outputs a big-endian binary representation of
     //         // fe_gadget's value, so we have to reverse it to get the little-endian
@@ -197,82 +196,20 @@ impl<ConstraintF: Field> EqGadget<ConstraintF> for UInt8<ConstraintF> {
 }
 
 impl<ConstraintF: Field> AllocVar<u8, ConstraintF> for UInt8<ConstraintF> {
-    fn alloc_constant(
-        _: ConstraintSystemRef<ConstraintF>,
-        t: impl Borrow<u8>,
+    fn new_variable<T: Borrow<u8>>(
+        cs: ConstraintSystemRef<ConstraintF>,
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+        mode: AllocationMode,
     ) -> Result<Self, SynthesisError> {
-        Ok(UInt8::constant(*t.borrow()))
-    }
-
-    fn alloc_witness_checked<F, T>(
-        cs: ConstraintSystemRef<ConstraintF>,
-        value_gen: F,
-    ) -> Result<Self, SynthesisError>
-    where
-        F: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<u8>,
-    {
-        let value = value_gen().map(|val| *val.borrow());
+        let value = f().map(|f| *f.borrow());
         let values = match value {
-            Ok(mut val) => {
-                let mut v = Vec::with_capacity(8);
-
-                for _ in 0..8 {
-                    v.push(Some(val & 1 == 1));
-                    val >>= 1;
-                }
-
-                v
-            }
+            Ok(val) => (0..8).map(|i| Some((val >> i) & 1 == 1)).collect(),
             _ => vec![None; 8],
         };
-
         let bits = values
             .into_iter()
-            .map(|v| {
-                AllocatedBit::alloc_witness(cs.clone(), || {
-                    v.ok_or(SynthesisError::AssignmentMissing)
-                })
-                .map(From::from)
-            })
-            .collect::<Result<Vec<_>, SynthesisError>>()?;
-
-        Ok(Self {
-            bits,
-            value: value.ok(),
-        })
-    }
-
-    fn alloc_input_checked<F, T>(
-        cs: ConstraintSystemRef<ConstraintF>,
-        value_gen: F,
-    ) -> Result<Self, SynthesisError>
-    where
-        F: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<u8>,
-    {
-        let value = value_gen().map(|val| *val.borrow());
-        let values = match value {
-            Ok(mut val) => {
-                let mut v = Vec::with_capacity(8);
-                for _ in 0..8 {
-                    v.push(Some(val & 1 == 1));
-                    val >>= 1;
-                }
-
-                v
-            }
-            _ => vec![None; 8],
-        };
-
-        let bits = values
-            .into_iter()
-            .map(|v| {
-                AllocatedBit::alloc_input(cs.clone(), || v.ok_or(SynthesisError::AssignmentMissing))
-                    .map(From::from)
-            })
-            .collect::<Result<Vec<_>, SynthesisError>>()?;
-
+            .map(|v| Boolean::new_variable(cs.clone(), || v.get(), mode))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             bits,
             value: value.ok(),
@@ -300,10 +237,10 @@ mod test {
     }
 
     #[test]
-    fn test_uint8_alloc_input_vec() {
+    fn test_uint8_new_input_vec() {
         let mut cs = TestConstraintSystem::<Fr>::new();
         let byte_vals = (64u8..128u8).collect::<Vec<_>>();
-        let bytes = UInt8::alloc_input_vec(cs.ns(|| "alloc value"), &byte_vals).unwrap();
+        let bytes = UInt8::new_input_vec(cs.ns(|| "alloc value"), &byte_vals).unwrap();
         for (native_byte, gadget_byte) in byte_vals.into_iter().zip(bytes) {
             let bits = gadget_byte.into_bits_le();
             for (i, bit) in bits.iter().enumerate() {

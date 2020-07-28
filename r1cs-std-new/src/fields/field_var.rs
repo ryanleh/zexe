@@ -97,7 +97,7 @@ where
             (Var(v1), Var(v2), Var(v3)) => v1.mul_equals(v2, v3),
             (Var(v1), Var(v2), Constant(f)) => {
                 let cs = v1.cs().unwrap();
-                let v3 = V::alloc_constant(cs.clone(), f).unwrap();
+                let v3 = V::new_constant(cs.clone(), f).unwrap();
                 v1.mul_equals(v2, &v3)
             }
         }
@@ -110,12 +110,12 @@ where
             (Constant(_), Constant(_)) => Ok(()),
             (Constant(f), Var(r)) => {
                 let cs = r.cs().unwrap();
-                let v = V::alloc_witness(cs, || Ok(f))?;
+                let v = V::new_witness(cs, || Ok(f))?;
                 v.square_equals(&r)
             }
             (Var(v), Constant(f)) => {
                 let cs = v.cs().unwrap();
-                let r = V::alloc_witness(cs, || Ok(f))?;
+                let r = V::new_witness(cs, || Ok(f))?;
                 v.square_equals(&r)
             }
             (Var(v1), Var(v2)) => v1.square_equals(v2),
@@ -363,7 +363,7 @@ where
             (Self::Constant(c1), Self::Constant(c2)) => Ok(Boolean::Constant(c1 == c2)),
             (Self::Constant(c), Self::Var(v)) | (Self::Var(v), Self::Constant(c)) => {
                 let cs = v.cs().unwrap();
-                let c = V::alloc_constant(cs, c)?;
+                let c = V::new_constant(cs, c)?;
                 c.is_eq(v)
             }
             (Self::Var(v1), Self::Var(v2)) => v1.is_eq(v2),
@@ -380,7 +380,7 @@ where
             (Self::Constant(_), Self::Constant(_)) => Ok(()),
             (Self::Constant(c), Self::Var(v)) | (Self::Var(v), Self::Constant(c)) => {
                 let cs = v.cs().unwrap();
-                let c = V::alloc_constant(cs, c)?;
+                let c = V::new_constant(cs, c)?;
                 c.conditional_enforce_equal(v, should_enforce)
             }
             (Self::Var(v1), Self::Var(v2)) => v1.conditional_enforce_equal(v2, should_enforce),
@@ -397,7 +397,7 @@ where
             (Self::Constant(_), Self::Constant(_)) => Ok(()),
             (Self::Constant(c), Self::Var(v)) | (Self::Var(v), Self::Constant(c)) => {
                 let cs = v.cs().unwrap();
-                let c = V::alloc_constant(cs, c)?;
+                let c = V::new_constant(cs, c)?;
                 c.conditional_enforce_not_equal(v, should_enforce)
             }
             (Self::Var(v1), Self::Var(v2)) => v1.conditional_enforce_not_equal(v2, should_enforce),
@@ -469,11 +469,11 @@ where
             _ => {
                 let cs = cond.cs().unwrap();
                 let true_value = match true_value {
-                    Self::Constant(f) => V::alloc_constant(cs.clone(), f)?,
+                    Self::Constant(f) => V::new_constant(cs.clone(), f)?,
                     Self::Var(v) => v.clone(),
                 };
                 let false_value = match false_value {
-                    Self::Constant(f) => V::alloc_constant(cs.clone(), f)?,
+                    Self::Constant(f) => V::new_constant(cs.clone(), f)?,
                     Self::Var(v) => v.clone(),
                 };
                 V::conditionally_select(cond, &true_value, &false_value).map(Self::Var)
@@ -553,35 +553,15 @@ where
     V: AllocatedField<F, ConstraintF = ConstraintF>,
     ConstraintF: Field,
 {
-    #[inline]
-    fn alloc_constant(
-        _: ConstraintSystemRef<ConstraintF>,
-        t: impl Borrow<F>,
+    fn new_variable<T: Borrow<F>>(
+        cs: ConstraintSystemRef<ConstraintF>,
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+        mode: AllocationMode,
     ) -> Result<Self, SynthesisError> {
-        Ok(Self::Constant(*t.borrow()))
-    }
-
-    #[inline]
-    fn alloc_witness_checked<FN, T>(
-        cs: ConstraintSystemRef<ConstraintF>,
-        value_gen: FN,
-    ) -> Result<Self, SynthesisError>
-    where
-        FN: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<F>,
-    {
-        V::alloc_witness_checked(cs, value_gen).map(Self::Var)
-    }
-
-    #[inline]
-    fn alloc_input_checked<FN, T>(
-        cs: ConstraintSystemRef<ConstraintF>,
-        value_gen: FN,
-    ) -> Result<Self, SynthesisError>
-    where
-        FN: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<F>,
-    {
-        V::alloc_input_checked(cs, value_gen).map(Self::Var)
+        if mode == AllocationMode::Constant {
+            Ok(Self::Constant(*f()?.borrow()))
+        } else {
+            V::new_variable(cs, f, mode).map(Self::Var)
+        }
     }
 }

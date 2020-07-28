@@ -26,7 +26,7 @@ pub trait AllocatedQuadExtParams<AF: AllocatedField<Self::BaseField>>: QuadExtPa
 
 impl<AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>> AllocatedQuadExt<AF, P> {
     pub(crate) fn one(cs: ConstraintSystemRef<AF::ConstraintF>) -> Result<Self, SynthesisError> {
-        Self::alloc_constant(cs, QuadExtField::one())
+        Self::new_constant(cs, QuadExtField::one())
     }
 
     pub fn new(c0: AF, c1: AF) -> Self {
@@ -113,7 +113,7 @@ where
     fn from(other: Boolean<AF::ConstraintF>) -> Self {
         if let Some(cs) = other.cs() {
             let c0 = AF::from(other);
-            let c1 = AF::alloc_constant(cs, P::BaseField::zero()).unwrap();
+            let c1 = AF::new_constant(cs, P::BaseField::zero()).unwrap();
             Self::new(c0, c1)
         } else {
             unreachable!("Cannot create a constant value")
@@ -222,8 +222,8 @@ where
     }
 
     fn inverse(&self) -> Result<Self, SynthesisError> {
-        let one = Self::alloc_constant(self.cs().get()?.clone(), QuadExtField::one())?;
-        let inverse = Self::alloc_witness(self.cs().get()?.clone(), || {
+        let one = Self::new_constant(self.cs().get()?.clone(), QuadExtField::one())?;
+        let inverse = Self::new_witness(self.cs().get()?.clone(), || {
             self.value().and_then(|val| val.inverse().get())
         })?;
         self.mul_equals(&inverse, &one)?;
@@ -484,64 +484,21 @@ where
     AF: AllocatedField<P::BaseField>,
     P: AllocatedQuadExtParams<AF>,
 {
-    #[inline]
-    fn alloc_constant(
+    fn new_variable<T: Borrow<QuadExtField<P>>>(
         cs: ConstraintSystemRef<AF::ConstraintF>,
-        t: impl Borrow<QuadExtField<P>>,
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+        mode: AllocationMode,
     ) -> Result<Self, SynthesisError> {
-        let t = *t.borrow();
-        let c0 = AF::alloc_constant(cs.clone(), t.c0)?;
-        let c1 = AF::alloc_constant(cs, t.c1)?;
-        Ok(Self::new(c0, c1))
-    }
-
-    #[inline]
-    fn alloc_witness_checked<FN, T>(
-        cs: ConstraintSystemRef<AF::ConstraintF>,
-        value_gen: FN,
-    ) -> Result<Self, SynthesisError>
-    where
-        FN: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<QuadExtField<P>>,
-    {
-        let (c0, c1) = match value_gen() {
-            Ok(fe) => {
-                let fe = *fe.borrow();
-                (Ok(fe.c0), Ok(fe.c1))
-            }
+        let (c0, c1) = match f() {
+            Ok(fe) => (Ok(fe.borrow().c0), Ok(fe.borrow().c1)),
             Err(_) => (
                 Err(SynthesisError::AssignmentMissing),
                 Err(SynthesisError::AssignmentMissing),
             ),
         };
 
-        let c0 = AF::alloc_witness_checked(cs.clone(), || c0)?;
-        let c1 = AF::alloc_witness_checked(cs, || c1)?;
-        Ok(Self::new(c0, c1))
-    }
-
-    #[inline]
-    fn alloc_input_checked<FN, T>(
-        cs: ConstraintSystemRef<AF::ConstraintF>,
-        value_gen: FN,
-    ) -> Result<Self, SynthesisError>
-    where
-        FN: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<QuadExtField<P>>,
-    {
-        let (c0, c1) = match value_gen() {
-            Ok(fe) => {
-                let fe = *fe.borrow();
-                (Ok(fe.c0), Ok(fe.c1))
-            }
-            Err(_) => (
-                Err(SynthesisError::AssignmentMissing),
-                Err(SynthesisError::AssignmentMissing),
-            ),
-        };
-
-        let c0 = AF::alloc_input_checked(cs.clone(), || c0)?;
-        let c1 = AF::alloc_input_checked(cs, || c1)?;
+        let c0 = AF::new_variable(cs.clone(), || c0, mode)?;
+        let c1 = AF::new_variable(cs.clone(), || c1, mode)?;
         Ok(Self::new(c0, c1))
     }
 }

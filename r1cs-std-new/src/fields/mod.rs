@@ -122,7 +122,7 @@ pub trait AllocatedField<F: Field>:
     /// It is up to the caller to ensure that denominator is non-zero,
     /// since in that case the result is unconstrained.
     fn mul_by_inverse(&self, denominator: &Self) -> Result<Self, SynthesisError> {
-        let result = Self::alloc_witness(self.cs().unwrap(), || {
+        let result = Self::new_witness(self.cs().unwrap(), || {
             let denominator_inv_native = denominator.value()?.inverse().get()?;
             let result = self.value()? * &denominator_inv_native;
             Ok(result)

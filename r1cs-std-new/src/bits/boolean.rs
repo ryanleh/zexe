@@ -36,7 +36,7 @@ impl<F: Field> AllocatedBit<F> {
     /// Performs an XOR operation over the two operands, returning
     /// an `AllocatedBit`.
     pub fn xor(&self, b: &Self) -> Result<Self, SynthesisError> {
-        let result = Self::alloc_witness(self.cs.clone(), || Ok(self.value()? ^ b.value()?))?;
+        let result = Self::new_witness(self.cs.clone(), || Ok(self.value()? ^ b.value()?))?;
 
         // Constrain (a + a) * (b) = (a + b - c)
         // Given that a and b are boolean constrained, if they
@@ -65,7 +65,7 @@ impl<F: Field> AllocatedBit<F> {
     /// Performs an AND operation over the two operands, returning
     /// an `AllocatedBit`.
     pub fn and(&self, b: &Self) -> Result<Self, SynthesisError> {
-        let result = Self::alloc_witness(self.cs.clone(), || Ok(self.value()? & b.value()?))?;
+        let result = Self::new_witness(self.cs.clone(), || Ok(self.value()? & b.value()?))?;
 
         // Constrain (a) * (b) = (c), ensuring c is 1 iff
         // a AND b are both 1.
@@ -81,7 +81,7 @@ impl<F: Field> AllocatedBit<F> {
     /// Performs an OR operation over the two operands, returning
     /// an `AllocatedBit`.
     pub fn or(&self, b: &Self) -> Result<Self, SynthesisError> {
-        let result = Self::alloc_witness(self.cs.clone(), || Ok(self.value()? | b.value()?))?;
+        let result = Self::new_witness(self.cs.clone(), || Ok(self.value()? | b.value()?))?;
 
         // Constrain (1 - a) * (1 - b) = (c), ensuring c is 1 iff
         // a and b are both false, and otherwise c is 0.
@@ -96,7 +96,7 @@ impl<F: Field> AllocatedBit<F> {
 
     /// Calculates `a AND (NOT b)`.
     pub fn and_not(&self, b: &Self) -> Result<Self, SynthesisError> {
-        let result = Self::alloc_witness(self.cs.clone(), || Ok(self.value()? & !b.value()?))?;
+        let result = Self::new_witness(self.cs.clone(), || Ok(self.value()? & !b.value()?))?;
 
         // Constrain (a) * (1 - b) = (c), ensuring c is 1 iff
         // a is true and b is false, and otherwise c is 0.
@@ -111,7 +111,7 @@ impl<F: Field> AllocatedBit<F> {
 
     /// Calculates `(NOT a) AND (NOT b)`.
     pub fn nor(&self, b: &Self) -> Result<Self, SynthesisError> {
-        let result = Self::alloc_witness(self.cs.clone(), || Ok(!(self.value()? | b.value()?)))?;
+        let result = Self::new_witness(self.cs.clone(), || Ok(!(self.value()? | b.value()?)))?;
 
         // Constrain (1 - a) * (1 - b) = (c), ensuring c is 1 iff
         // a and b are both false, and otherwise c is 0.
@@ -132,77 +132,46 @@ impl<F: Field> R1CSVar<F> for AllocatedBit<F> {
 }
 
 impl<F: Field> AllocVar<bool, F> for AllocatedBit<F> {
-    fn alloc_constant(
+    fn new_variable<T: Borrow<bool>>(
         cs: ConstraintSystemRef<F>,
-        t: impl Borrow<bool>,
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+        mode: AllocationMode,
     ) -> Result<Self, SynthesisError> {
-        let value = *t.borrow();
-        let variable = if value { Variable::One } else { Variable::Zero };
-        Ok(Self {
-            variable,
-            value: Some(value),
-            cs,
-        })
-    }
+        if mode == AllocationMode::Constant {
+            let value = *f()?.borrow();
+            let variable = if value { Variable::One } else { Variable::Zero };
+            Ok(Self {
+                variable,
+                value: Some(value),
+                cs,
+            })
+        } else {
+            let mut value = None;
+            let val_generator = || {
+                value = Some(*f()?.borrow());
+                value.get().map(bool_to_f)
+            };
+            let variable = if mode == AllocationMode::Input {
+                cs.new_input_variable(val_generator)?
+            } else {
+                cs.new_witness_variable(val_generator)?
+            };
 
-    fn alloc_witness_checked<Func, T>(
-        cs: ConstraintSystemRef<F>,
-        value_gen: Func,
-    ) -> Result<Self, SynthesisError>
-    where
-        Func: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<bool>,
-    {
-        let mut value = None;
-        let variable = cs.new_witness_variable(|| {
-            value = Some(*value_gen()?.borrow());
-            value.get().map(bool_to_f)
-        })?;
+            // Constrain: (1 - a) * a = 0
+            // This constrains a to be either 0 or 1.
+            cs.enforce_named_constraint(
+                "Booleanity check",
+                lc!() + Variable::One - variable,
+                lc!() + variable,
+                lc!(),
+            )?;
 
-        // Constrain: (1 - a) * a = 0
-        // This constrains a to be either 0 or 1.
-        cs.enforce_named_constraint(
-            "Booleanity check",
-            lc!() + Variable::One - variable,
-            lc!() + variable,
-            lc!(),
-        )?;
-
-        Ok(Self {
-            variable,
-            value,
-            cs,
-        })
-    }
-
-    fn alloc_input_checked<Func, T>(
-        cs: ConstraintSystemRef<F>,
-        value_gen: Func,
-    ) -> Result<Self, SynthesisError>
-    where
-        Func: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<bool>,
-    {
-        let mut value = None;
-        let variable = cs.new_input_variable(|| {
-            value = Some(*value_gen()?.borrow());
-            value.get().map(bool_to_f)
-        })?;
-
-        // Constrain: (1 - a) * a = 0
-        // This constrains a to be either 0 or 1.
-        cs.enforce_named_constraint(
-            "Booleanity check",
-            lc!() + Variable::One - variable,
-            lc!() + variable,
-            lc!(),
-        )?;
-
-        Ok(Self {
-            variable,
-            value,
-            cs,
-        })
+            Ok(Self {
+                variable,
+                value,
+                cs,
+            })
+        }
     }
 }
 
@@ -485,33 +454,16 @@ impl<F: Field> From<AllocatedBit<F>> for Boolean<F> {
 }
 
 impl<F: Field> AllocVar<bool, F> for Boolean<F> {
-    fn alloc_constant(
-        _: ConstraintSystemRef<F>,
-        t: impl Borrow<bool>,
+    fn new_variable<T: Borrow<bool>>(
+        cs: ConstraintSystemRef<F>,
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+        mode: AllocationMode,
     ) -> Result<Self, SynthesisError> {
-        Ok(Boolean::constant(*t.borrow()))
-    }
-
-    fn alloc_witness_checked<Func, T>(
-        cs: ConstraintSystemRef<F>,
-        value_gen: Func,
-    ) -> Result<Self, SynthesisError>
-    where
-        Func: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<bool>,
-    {
-        AllocatedBit::alloc_witness_checked(cs, value_gen).map(Boolean::from)
-    }
-
-    fn alloc_input_checked<Func, T>(
-        cs: ConstraintSystemRef<F>,
-        value_gen: Func,
-    ) -> Result<Self, SynthesisError>
-    where
-        Func: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<bool>,
-    {
-        AllocatedBit::alloc_input_checked(cs, value_gen).map(Boolean::from)
+        if mode == AllocationMode::Constant {
+            Ok(Boolean::Constant(*f()?.borrow()))
+        } else {
+            AllocatedBit::new_variable(cs, f, mode).map(Boolean::from)
+        }
     }
 }
 
@@ -528,7 +480,7 @@ impl<F: Field> EqGadget<F> for Boolean<F> {
             (_, _) => {
                 let cs = self.cs().or(other.cs()).unwrap();
                 let is_equal =
-                    Self::alloc_witness(cs.clone(), || Ok(self.value()? == other.value()?))?;
+                    Self::new_witness(cs.clone(), || Ok(self.value()? == other.value()?))?;
 
                 let multiplier = cs.new_witness_variable(|| {
                     if is_equal.value()? {
@@ -653,7 +605,7 @@ impl<F: Field> CondSelectGadget<F> for Boolean<F> {
                 (x, &Constant(true)) => cond.not().or(x),
                 (a, b) => {
                     let cs = cond.cs().unwrap();
-                    let result = Boolean::alloc_witness(cs.clone(), || {
+                    let result = Boolean::new_witness(cs.clone(), || {
                         let cond = cond.value()?;
                         Ok(if cond { a.value()? } else { b.value()? })
                     })?;

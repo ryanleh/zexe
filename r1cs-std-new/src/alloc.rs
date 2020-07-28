@@ -3,114 +3,52 @@ use algebra::Field;
 use core::borrow::Borrow;
 use r1cs_core::{ConstraintSystemRef, SynthesisError};
 
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Copy, Clone)]
+pub enum AllocationMode {
+    Constant,
+    Witness,
+    Input,
+}
+
 pub trait AllocVar<V, F: Field>
 where
     Self: Sized,
     V: ?Sized,
 {
-    /// Allocate a constant variable in the constraint system.
-    fn alloc_constant(
+    fn new_variable<T: Borrow<V>>(
         cs: ConstraintSystemRef<F>,
-        t: impl Borrow<V>,
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+        mode: AllocationMode,
     ) -> Result<Self, SynthesisError>;
 
-    /// Allocate a constant variable in the constraint system.
-    fn alloc_witness<Func, T>(cs: ConstraintSystemRef<F>, f: Func) -> Result<Self, SynthesisError>
-    where
-        Func: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<V>,
-    {
-        Self::alloc_witness_checked(cs, f)
+    fn new_constant(cs: ConstraintSystemRef<F>, t: impl Borrow<V>) -> Result<Self, SynthesisError> {
+        Self::new_variable(cs, || Ok(t), AllocationMode::Constant)
     }
 
-    fn alloc_witness_checked<Func, T>(
+    fn new_input<T: Borrow<V>>(
         cs: ConstraintSystemRef<F>,
-        f: Func,
-    ) -> Result<Self, SynthesisError>
-    where
-        Func: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<V>;
-
-    fn alloc_input<Func, T>(cs: ConstraintSystemRef<F>, f: Func) -> Result<Self, SynthesisError>
-    where
-        Func: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<V>,
-    {
-        Self::alloc_input_checked(cs, f)
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+    ) -> Result<Self, SynthesisError> {
+        Self::new_variable(cs, f, AllocationMode::Input)
     }
 
-    fn alloc_input_checked<Func, T>(
+    fn new_witness<T: Borrow<V>>(
         cs: ConstraintSystemRef<F>,
-        f: Func,
-    ) -> Result<Self, SynthesisError>
-    where
-        Func: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<V>;
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+    ) -> Result<Self, SynthesisError> {
+        Self::new_variable(cs, f, AllocationMode::Witness)
+    }
 }
 
 impl<I, F: Field, A: AllocVar<I, F>> AllocVar<[I], F> for Vec<A> {
-    #[inline]
-    fn alloc_constant(
+    fn new_variable<T: Borrow<[I]>>(
         cs: ConstraintSystemRef<F>,
-        t: impl Borrow<[I]>,
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+        mode: AllocationMode,
     ) -> Result<Self, SynthesisError> {
         let mut vec = Vec::new();
-        for value in t.borrow().iter() {
-            vec.push(A::alloc_constant(cs.clone(), value)?);
-        }
-        Ok(vec)
-    }
-
-    fn alloc_witness<Func, T>(cs: ConstraintSystemRef<F>, f: Func) -> Result<Self, SynthesisError>
-    where
-        Func: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<[I]>,
-    {
-        let mut vec = Vec::new();
         for value in f()?.borrow().iter() {
-            vec.push(A::alloc_witness(cs.clone(), || Ok(value))?);
-        }
-        Ok(vec)
-    }
-
-    fn alloc_input<Func, T>(cs: ConstraintSystemRef<F>, f: Func) -> Result<Self, SynthesisError>
-    where
-        Func: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<[I]>,
-    {
-        let mut vec = Vec::new();
-        for value in f()?.borrow().iter() {
-            vec.push(A::alloc_input(cs.clone(), || Ok(value))?);
-        }
-        Ok(vec)
-    }
-
-    fn alloc_witness_checked<Func, T>(
-        cs: ConstraintSystemRef<F>,
-        f: Func,
-    ) -> Result<Self, SynthesisError>
-    where
-        Func: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<[I]>,
-    {
-        let mut vec = Vec::new();
-        for value in f()?.borrow().iter() {
-            vec.push(A::alloc_witness_checked(cs.clone(), || Ok(value))?);
-        }
-        Ok(vec)
-    }
-
-    fn alloc_input_checked<Func, T>(
-        cs: ConstraintSystemRef<F>,
-        f: Func,
-    ) -> Result<Self, SynthesisError>
-    where
-        Func: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<[I]>,
-    {
-        let mut vec = Vec::new();
-        for value in f()?.borrow().iter() {
-            vec.push(A::alloc_input_checked(cs.clone(), || Ok(value))?);
+            vec.push(A::new_variable(cs.clone(), || Ok(value), mode)?);
         }
         Ok(vec)
     }

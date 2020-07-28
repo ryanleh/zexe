@@ -72,7 +72,7 @@ impl<F: PrimeField> AllocatedField<F> for AllocatedFp<F> {
     #[inline]
     fn inverse(&self) -> Result<Self, SynthesisError> {
         let inverse =
-            Self::alloc_witness(self.cs().get()?.clone(), || self.value()?.inverse().get())?;
+            Self::new_witness(self.cs().get()?.clone(), || self.value()?.inverse().get())?;
 
         self.cs.enforce_constraint(
             lc!() + self.variable,
@@ -170,7 +170,7 @@ impl_ops!(
     mul_assign,
     mul_constant,
     |this: &'a AllocatedFp<F>, other: &'a AllocatedFp<F>| {
-        let product = AllocatedFp::alloc_witness(this.cs.clone(), || {
+        let product = AllocatedFp::new_witness(this.cs.clone(), || {
             Ok(this.value.get()? * &other.value.get()?)
         })
         .unwrap();
@@ -197,9 +197,9 @@ impl_ops!(
 impl<F: PrimeField> EqGadget<F> for AllocatedFp<F> {
     fn is_eq(&self, other: &Self) -> Result<Boolean<F>, SynthesisError> {
         let is_equal =
-            Boolean::alloc_witness(self.cs.clone(), || Ok(self.value()? == other.value()?))?;
+            Boolean::new_witness(self.cs.clone(), || Ok(self.value()? == other.value()?))?;
 
-        let multiplier = Self::alloc_witness(self.cs.clone(), || {
+        let multiplier = Self::new_witness(self.cs.clone(), || {
             if is_equal.value()? {
                 let difference = self.value()? - other.value()?;
                 difference
@@ -236,7 +236,7 @@ impl<F: PrimeField> EqGadget<F> for AllocatedFp<F> {
         other: &Self,
         should_enforce: &Boolean<F>,
     ) -> Result<(), SynthesisError> {
-        let multiplier = Self::alloc_witness(self.cs.clone(), || {
+        let multiplier = Self::new_witness(self.cs.clone(), || {
             if should_enforce.value()? {
                 let difference = self.value()? - other.value()?;
                 difference
@@ -293,7 +293,7 @@ impl<F: PrimeField> ToBitsGadget<F> for AllocatedFp<F> {
 
         let mut bits = vec![];
         for b in bit_values {
-            bits.push(AllocatedBit::alloc_witness(cs.clone(), || b.get())?);
+            bits.push(AllocatedBit::new_witness(cs.clone(), || b.get())?);
         }
 
         let mut lc = LinearCombination::zero();
@@ -343,7 +343,7 @@ impl<F: PrimeField> ToBytesGadget<F> for AllocatedFp<F> {
             }
         };
 
-        let bytes = UInt8::alloc_witness_vec(cs.clone(), &byte_values)?;
+        let bytes = UInt8::new_witness_vec(cs.clone(), &byte_values)?;
 
         let mut lc = LinearCombination::zero();
         let mut coeff = F::one();
@@ -378,7 +378,7 @@ impl<F: PrimeField> CondSelectGadget<F> for AllocatedFp<F> {
             Boolean::Constant(false) => Ok(false_value.clone()),
             _ => {
                 let cs = cond.cs().unwrap();
-                let result = Self::alloc_witness(cs.clone(), || {
+                let result = Self::new_witness(cs.clone(), || {
                     cond.value()
                         .and_then(|c| if c { true_value } else { false_value }.value())
                 })?;
@@ -407,7 +407,7 @@ impl<F: PrimeField> TwoBitLookupGadget<F> for AllocatedFp<F> {
         debug_assert!(b.len() == 2);
         debug_assert!(c.len() == 4);
         if let Some(cs) = b.cs() {
-            let result = Self::alloc_witness(cs.clone(), || {
+            let result = Self::new_witness(cs.clone(), || {
                 let lsb = b[0].value()? as usize;
                 let msb = b[1].value()? as usize;
                 let index = lsb + (1 << msb);
@@ -439,7 +439,7 @@ impl<F: PrimeField> ThreeBitCondNegLookupGadget<F> for AllocatedFp<F> {
         debug_assert!(c.len() == 4);
 
         if let Some(cs) = b.cs() {
-            let result = Self::alloc_witness(cs.clone(), || {
+            let result = Self::new_witness(cs.clone(), || {
                 let lsb = b[0].value()? as usize;
                 let msb = b[1].value()? as usize;
                 let index = lsb + (1 << msb);
@@ -472,47 +472,27 @@ impl<F: PrimeField> ThreeBitCondNegLookupGadget<F> for AllocatedFp<F> {
 }
 
 impl<F: PrimeField> AllocVar<F, F> for AllocatedFp<F> {
-    #[inline]
-    fn alloc_constant(
+    fn new_variable<T: Borrow<F>>(
         cs: ConstraintSystemRef<F>,
-        t: impl Borrow<F>,
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+        mode: AllocationMode,
     ) -> Result<Self, SynthesisError> {
-        let v = *t.borrow();
-        let lc = cs.new_lc(lc!() + (v, Variable::One));
-        Ok(Self::new(Some(v), lc, cs))
-    }
-
-    #[inline]
-    fn alloc_witness_checked<FN, T>(
-        cs: ConstraintSystemRef<F>,
-        value_gen: FN,
-    ) -> Result<Self, SynthesisError>
-    where
-        FN: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<F>,
-    {
-        let mut value = None;
-        let variable = cs.new_witness_variable(|| {
-            value = Some(*value_gen()?.borrow());
-            value.ok_or(SynthesisError::AssignmentMissing)
-        })?;
-        Ok(Self::new(value, variable, cs.clone()))
-    }
-
-    #[inline]
-    fn alloc_input_checked<FN, T>(
-        cs: ConstraintSystemRef<F>,
-        value_gen: FN,
-    ) -> Result<Self, SynthesisError>
-    where
-        FN: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<F>,
-    {
-        let mut value = None;
-        let variable = cs.new_input_variable(|| {
-            value = Some(*value_gen()?.borrow());
-            value.ok_or(SynthesisError::AssignmentMissing)
-        })?;
-        Ok(Self::new(value, variable, cs.clone()))
+        if mode == AllocationMode::Constant {
+            let v = *f()?.borrow();
+            let lc = cs.new_lc(lc!() + (v, Variable::One));
+            Ok(Self::new(Some(v), lc, cs))
+        } else {
+            let mut value = None;
+            let value_generator = || {
+                value = Some(*f()?.borrow());
+                value.ok_or(SynthesisError::AssignmentMissing)
+            };
+            let variable = if mode == AllocationMode::Input {
+                cs.new_input_variable(value_generator)?
+            } else {
+                cs.new_witness_variable(value_generator)?
+            };
+            Ok(Self::new(value, variable, cs.clone()))
+        }
     }
 }
