@@ -9,11 +9,11 @@ use crate::{fields::AllocatedField, prelude::*, Assignment, Vec};
 
 #[derive(Derivative)]
 #[derivative(
-    Debug(bound = "AF: AllocatedField<P::BaseField>, P: CubicExtParameters"),
-    Clone(bound = "AF: AllocatedField<P::BaseField>, P: CubicExtParameters")
+    Debug(bound = "AF: AllocatedField<P::BaseField>, P: AllocatedCubicExtParams<AF>"),
+    Clone(bound = "AF: AllocatedField<P::BaseField>, P: AllocatedCubicExtParams<AF>")
 )]
 #[must_use]
-pub struct AllocatedCubicExt<AF: AllocatedField<P::BaseField>, P: CubicExtParameters> {
+pub struct AllocatedCubicExt<AF: AllocatedField<P::BaseField>, P: AllocatedCubicExtParams<AF>> {
     pub c0: AF,
     pub c1: AF,
     pub c2: AF,
@@ -21,7 +21,11 @@ pub struct AllocatedCubicExt<AF: AllocatedField<P::BaseField>, P: CubicExtParame
     _params: PhantomData<P>,
 }
 
-impl<AF: AllocatedField<P::BaseField>, P: CubicExtParameters> AllocatedCubicExt<AF, P> {
+pub trait AllocatedCubicExtParams<AF: AllocatedField<Self::BaseField>>: CubicExtParameters {
+    fn mul_base_field_vars_by_frob_coeff(c1: &mut AF, c2: &mut AF, power: usize);
+}
+
+impl<AF: AllocatedField<P::BaseField>, P: AllocatedCubicExtParams<AF>> AllocatedCubicExt<AF, P> {
     #[inline]
     pub fn new(c0: AF, c1: AF, c2: AF) -> Self {
         let _params = PhantomData;
@@ -57,7 +61,7 @@ impl<AF: AllocatedField<P::BaseField>, P: CubicExtParameters> AllocatedCubicExt<
 impl<AF, P> R1CSVar<AF::ConstraintF> for AllocatedCubicExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: CubicExtParameters,
+    P: AllocatedCubicExtParams<AF>,
 {
     fn cs(&self) -> Option<ConstraintSystemRef<AF::ConstraintF>> {
         [&self.c0, &self.c1, &self.c2].cs()
@@ -67,7 +71,7 @@ where
 impl<AF, P> From<Boolean<AF::ConstraintF>> for AllocatedCubicExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: CubicExtParameters,
+    P: AllocatedCubicExtParams<AF>,
 {
     fn from(other: Boolean<AF::ConstraintF>) -> Self {
         if let Some(cs) = other.cs() {
@@ -83,7 +87,7 @@ where
 
 impl<AF, P> AllocatedField<CubicExtField<P>> for AllocatedCubicExt<AF, P>
 where
-    AF: AllocatedField<P::BaseField> + core::ops::MulAssign<P::FrobCoeff>,
+    AF: AllocatedField<P::BaseField>,
     AF: core::ops::Mul<AF, Output = AF>,
     for<'b> AF: core::ops::Add<&'b AF, Output = AF>,
     for<'b> AF: core::ops::Sub<&'b AF, Output = AF>,
@@ -93,8 +97,7 @@ where
     for<'b> &'b AF: core::ops::Add<P::BaseField, Output = AF>,
     for<'b> &'b AF: core::ops::Sub<P::BaseField, Output = AF>,
     for<'b> &'b AF: core::ops::Mul<P::BaseField, Output = AF>,
-    for<'b> &'b AF: core::ops::Mul<P::BasePrimeField, Output = AF>,
-    P: CubicExtParameters,
+    P: AllocatedCubicExtParams<AF>,
 {
     type ConstraintF = AF::ConstraintF;
 
@@ -203,9 +206,7 @@ where
         result.c1.frobenius_map_in_place(power)?;
         result.c2.frobenius_map_in_place(power)?;
 
-        result.c1 *= P::FROBENIUS_COEFF_C1[power % 3];
-        result.c2 *= P::FROBENIUS_COEFF_C2[power % 3];
-
+        P::mul_base_field_vars_by_frob_coeff(&mut result.c1, &mut result.c2, power);
         Ok(result)
     }
 
@@ -219,13 +220,13 @@ where
 }
 
 impl_bounded_ops!(
-    AllocatedCubicExt<AF, P>, 
-    CubicExtField<P>, 
-    Add, 
-    add, 
-    AddAssign, 
-    add_assign, 
-    add_constant, 
+    AllocatedCubicExt<AF, P>,
+    CubicExtField<P>,
+    Add,
+    add,
+    AddAssign,
+    add_assign,
+    add_constant,
     |this: &'a AllocatedCubicExt<AF, P>, other: &'a AllocatedCubicExt<AF, P>| {
         let c0 = &this.c0 + &other.c0;
         let c1 = &this.c1 + &other.c1;
@@ -238,18 +239,18 @@ impl_bounded_ops!(
         let c2 = &this.c2 + other.c2;
         AllocatedCubicExt::new(c0, c1, c2)
     },
-    (AF: AllocatedField<P::BaseField>, P: CubicExtParameters),
+    (AF: AllocatedField<P::BaseField>, P: AllocatedCubicExtParams<AF>),
     for<'b> &'b AF: core::ops::Add<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Add<P::BaseField, Output = AF>,
 );
 impl_bounded_ops!(
-    AllocatedCubicExt<AF, P>, 
-    CubicExtField<P>, 
+    AllocatedCubicExt<AF, P>,
+    CubicExtField<P>,
     Sub,
-    sub, 
-    SubAssign, 
-    sub_assign, 
-    sub_constant, 
+    sub,
+    SubAssign,
+    sub_assign,
+    sub_constant,
     |this: &'a AllocatedCubicExt<AF, P>, other: &'a AllocatedCubicExt<AF, P>| {
         let c0 = &this.c0 - &other.c0;
         let c1 = &this.c1 - &other.c1;
@@ -262,156 +263,78 @@ impl_bounded_ops!(
         let c2 = &this.c2 - other.c2;
         AllocatedCubicExt::new(c0, c1, c2)
     },
-    (AF: AllocatedField<P::BaseField>, P: CubicExtParameters),
+    (AF: AllocatedField<P::BaseField>, P: AllocatedCubicExtParams<AF>),
     for<'b> &'b AF: core::ops::Sub<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Sub<P::BaseField, Output = AF>,
 );
 impl_bounded_ops!(
-    AllocatedCubicExt<AF, P>, 
-    CubicExtField<P>, 
+    AllocatedCubicExt<AF, P>,
+    CubicExtField<P>,
     Mul,
-    mul, 
-    MulAssign, 
-    mul_assign, 
-    mul_constant, 
+    mul,
+    MulAssign,
+    mul_assign,
+    mul_constant,
     |this: &'a AllocatedCubicExt<AF, P>, other: &'a AllocatedCubicExt<AF, P>| {
-        // Uses Toom-Cook-3x multiplication from
+        // Karatsuba multiplication for cubic extensions:
+        //     v0 = A.c0 * B.c0
+        //     v1 = A.c1 * B.c1
+        //     v2 = A.c2 * B.c2
+        //     result.c0 = v0 + β((a1 + a2)(b1 + b2) − v1 − v2)
+        //     result.c1 = (a0 + a1)(b0 + b1) − v0 − v1 + βv2
+        //     result.c2 = (a0 + a2)(b0 + b2) − v0 + v1 − v2,
         //
         // Reference:
         // "Multiplication and Squaring on Pairing-Friendly Fields"
-        //    Devegili, OhEigeartaigh, Scott, Dahab
-
-        // v0 = a(0)b(0)   = a0 * b0
+        // Devegili, OhEigeartaigh, Scott, Dahab
         let v0 = &this.c0 * &other.c0;
-
-        // v1 = a(1)b(1)   = (a0 + a1 + a2)(b0 + b1 + b2)
-        let v1 = (&this.c0 + &this.c1 + &this.c2) * (&other.c0 + &other.c1 + &other.c2);
-
-        // v2 = a(−1)b(−1) = (a0 − a1 + a2)(b0 − b1 + b2)
-        let v2 = (&this.c0 - &this.c1 + &this.c2) * (&other.c0 - &other.c1 + &other.c2);
-
-        // v3 = a(2)b(2)   = (a0 + 2a1 + 4a2)(b0 + 2b1 + 4b2)
-        let v3 = {
-            let a1_double = this.c1.double().unwrap();
-            let a2_quad = this.c2.double().unwrap().double().unwrap();
-            let a0_plus_2_a1_plus_4_a2 = &this.c0 + &a1_double + &a2_quad;
-
-            let b1_double = other.c1.double().unwrap();
-            let b2_quad = other.c2.double().unwrap().double().unwrap();
-            let b0_plus_2_b1_plus_4_b2 = &other.c0 + &b1_double + &b2_quad;
-
-            a0_plus_2_a1_plus_4_a2 * b0_plus_2_b1_plus_4_b2
-        };
-
-        // v4 = a(∞)b(∞)   = a2 * b2
-        let v4 = &this.c2 * &other.c2;
-
-        let two = P::BasePrimeField::one().double();
-        let six = two.double() + &two;
-        let mut two_and_six = [two, six];
-        algebra::fields::batch_inversion(&mut two_and_six);
-        let (two_inverse, six_inverse) = (two_and_six[0], two_and_six[1]);
-
-        let half_v0: AF = &v0 * two_inverse;
-        let half_v1: AF = &v1 * two_inverse;
-        let one_sixth_v2: AF = &v2 * six_inverse;
-        let one_sixth_v3: AF = &v3 * six_inverse;
-        let two_v4 = v4.double().unwrap();
-
-        // c0 = v0 + β * ((1/2)v0 − (1/2)v1 − (1/6)v2 + (1/6)v3 − 2v4)
-        let c0 = {
-            // No constraints, only get a linear combination back.
-            let temp = (&half_v0 - &half_v1 - &one_sixth_v2 + &one_sixth_v3 - &two_v4) * P::NONRESIDUE;
-            temp + &v0
-        };
-
-        // c1 = −(1/2)v0 + v1 − (1/3)v2 − (1/6)v3 + 2v4 + βv4
-        let c1 = {
-            let one_third_v2 = one_sixth_v2.double().unwrap();
-            half_v0.negate().unwrap() + &v1 - &one_third_v2 - &one_sixth_v3 + &two_v4 + &(&v4 * P::NONRESIDUE)
-        };
-
-        // -v0 + (1/2)v1 + (1/2)v2 −v4
-        let c2 = half_v1 + (&v2 * two_inverse) - &v4 - &v0;
+        let v1 = &this.c1 * &other.c1;
+        let v2 = &this.c2 * &other.c2;
+        let c0 =
+            (((&this.c1 + &this.c2) * (&other.c1 + &other.c2) - &v1 - &v2) * P::NONRESIDUE) + &v0 ;
+        let c1 =
+            (&this.c0 + &this.c1) * (&other.c0 + &other.c1) - &v0 - &v1 + (&v2 * P::NONRESIDUE);
+        let c2 =
+            (&this.c0 + &this.c2) * (&other.c0 + &other.c2) - &v0 + &v1 - &v2;
 
         AllocatedCubicExt::new(c0, c1, c2)
     },
     |this: &'a AllocatedCubicExt<AF, P>, other: CubicExtField<P>| {
-        // Uses Toom-Cook-3x multiplication from
+        // Karatsuba multiplication for cubic extensions:
+        //     v0 = A.c0 * B.c0
+        //     v1 = A.c1 * B.c1
+        //     v2 = A.c2 * B.c2
+        //     result.c0 = v0 + β((a1 + a2)(b1 + b2) − v1 − v2)
+        //     result.c1 = (a0 + a1)(b0 + b1) − v0 − v1 + βv2
+        //     result.c2 = (a0 + a2)(b0 + b2) − v0 + v1 − v2,
         //
         // Reference:
         // "Multiplication and Squaring on Pairing-Friendly Fields"
-        //    Devegili, OhEigeartaigh, Scott, Dahab
-
-        // v0 = a(0)b(0)   = a0 * b0
+        // Devegili, OhEigeartaigh, Scott, Dahab
         let v0 = &this.c0 * other.c0;
-
-        // v1 = a(1)b(1)   = (a0 + a1 + a2)(b0 + b1 + b2)
-        let v1 = (&this.c0 + &this.c1 + &this.c2) * (other.c0 + &other.c1 + &other.c2);
-
-        // v2 = a(−1)b(−1) = (a0 − a1 + a2)(b0 − b1 + b2)
-        let v2 = (&this.c0 - &this.c1 + &this.c2) * (other.c0 - &other.c1 + &other.c2);
-
-        // v3 = a(2)b(2)   = (a0 + 2a1 + 4a2)(b0 + 2b1 + 4b2)
-        let v3 = {
-            let a1_double = this.c1.double().unwrap();
-            let a2_quad = this.c2.double().unwrap().double().unwrap();
-            let a0_plus_2_a1_plus_4_a2 = &this.c0 + &a1_double + &a2_quad;
-
-            let b1_double = other.c1.double();
-            let b2_quad = other.c2.double().double();
-            let b0_plus_2_b1_plus_4_b2 = other.c0 + &b1_double + &b2_quad;
-
-            a0_plus_2_a1_plus_4_a2 * b0_plus_2_b1_plus_4_b2
-        };
-
-        // v4 = a(∞)b(∞)   = a2 * b2
-        let v4 = &this.c2 * other.c2;
-
-        let two = P::BasePrimeField::one().double();
-        let six = two.double() + &two;
-        let mut two_and_six = [two, six];
-        algebra::fields::batch_inversion(&mut two_and_six);
-        let (two_inverse, six_inverse) = (two_and_six[0], two_and_six[1]);
-
-        let half_v0: AF = &v0 * two_inverse;
-        let half_v1: AF = &v1 * two_inverse;
-        let one_sixth_v2: AF = &v2 * six_inverse;
-        let one_sixth_v3: AF = &v3 * six_inverse;
-        let two_v4 = v4.double().unwrap();
-
-        // c0 = v0 + β((1/2)v0 − (1/2)v1 − (1/6)v2 + (1/6)v3 − 2v4)
-        let c0 = 
-            (&half_v0 - &half_v1 - &one_sixth_v2 + &one_sixth_v3 - &two_v4) * P::NONRESIDUE + &v0;
-
-        // −(1/2)v0 + v1 − (1/3)v2 − (1/6)v3 + 2v4 + βv4
-        let c1 = {
-            let one_third_v2 = one_sixth_v2.double().unwrap();
-            let non_residue_v4 = &v4 * P::NONRESIDUE;
-
-            half_v0.negate().unwrap() + &v1 - one_third_v2 - &one_sixth_v3 + &two_v4 + &non_residue_v4
-        };
-
-        // -v0 + (1/2)v1 + (1/2)v2 −v4
-        let c2 = half_v1 + (&v2 * two_inverse) - &v4 - &v0;
-
+        let v1 = &this.c1 * other.c1;
+        let v2 = &this.c2 * other.c2;
+        let c0 =
+            ((&this.c1 + &this.c2) * (other.c1 + &other.c2) - &v1 - &v2) * P::NONRESIDUE + &v0;
+        let c1 =
+            (&this.c0 + &this.c1) * (other.c0 + &other.c1) - &v0 - &v1 + (&v2 * P::NONRESIDUE);
+        let c2 =
+            (&this.c0 + &this.c2) * (other.c0 + &other.c2) - &v0 + &v1 - &v2;
         AllocatedCubicExt::new(c0, c1, c2)
-
     },
-    (AF: AllocatedField<P::BaseField>, P: CubicExtParameters),
+    (AF: AllocatedField<P::BaseField>, P: AllocatedCubicExtParams<AF>),
     for<'b> &'b AF: core::ops::Add<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Sub<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Mul<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Add<P::BaseField, Output = AF>,
     for<'b> &'b AF: core::ops::Sub<P::BaseField, Output = AF>,
     for<'b> &'b AF: core::ops::Mul<P::BaseField, Output = AF>,
-    for<'b> &'b AF: core::ops::Mul<P::BasePrimeField, Output = AF>,
 );
 
 impl<AF, P> EqGadget<AF::ConstraintF> for AllocatedCubicExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: CubicExtParameters,
+    P: AllocatedCubicExtParams<AF>,
 {
     fn is_eq(&self, other: &Self) -> Result<Boolean<AF::ConstraintF>, SynthesisError> {
         let b0 = self.c0.is_eq(&other.c0)?;
@@ -448,7 +371,7 @@ where
 impl<AF, P> ToBitsGadget<AF::ConstraintF> for AllocatedCubicExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: CubicExtParameters,
+    P: AllocatedCubicExtParams<AF>,
 {
     fn to_bits(&self) -> Result<Vec<Boolean<AF::ConstraintF>>, SynthesisError> {
         let mut c0 = self.c0.to_bits()?;
@@ -472,7 +395,7 @@ where
 impl<AF, P> ToBytesGadget<AF::ConstraintF> for AllocatedCubicExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: CubicExtParameters,
+    P: AllocatedCubicExtParams<AF>,
 {
     fn to_bytes(&self) -> Result<Vec<UInt8<AF::ConstraintF>>, SynthesisError> {
         let mut c0 = self.c0.to_bytes()?;
@@ -499,7 +422,7 @@ where
 impl<AF, P> CondSelectGadget<AF::ConstraintF> for AllocatedCubicExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: CubicExtParameters,
+    P: AllocatedCubicExtParams<AF>,
 {
     #[inline]
     fn conditionally_select(
@@ -521,7 +444,7 @@ where
             <AF as AllocatedField<P::BaseField>>::ConstraintF,
             TableConstant = P::BaseField,
         >,
-    P: CubicExtParameters,
+    P: AllocatedCubicExtParams<AF>,
 {
     type TableConstant = CubicExtField<P>;
 
@@ -546,7 +469,7 @@ where
             <AF as AllocatedField<P::BaseField>>::ConstraintF,
             TableConstant = P::BaseField,
         >,
-    P: CubicExtParameters,
+    P: AllocatedCubicExtParams<AF>,
 {
     type TableConstant = CubicExtField<P>;
 
@@ -568,7 +491,7 @@ where
 impl<AF, P> AllocVar<CubicExtField<P>, AF::ConstraintF> for AllocatedCubicExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: CubicExtParameters,
+    P: AllocatedCubicExtParams<AF>,
 {
     #[inline]
     fn alloc_constant(
@@ -641,7 +564,7 @@ where
 // where
 //     AF: AllocatedField<P::BaseField>,
 //     for<'b> &'b AF: core::ops::Mul<P::BasePrimeField, Output = AF>,
-//     P: CubicExtParameters,
+//     P: AllocatedCubicExtParams<AF>,
 // {
 //     type Output = AllocatedCubicExt<AF, P>;
 

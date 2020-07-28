@@ -9,19 +9,23 @@ use crate::{fields::AllocatedField, prelude::*, Assignment, Vec};
 
 #[derive(Derivative)]
 #[derivative(
-    Debug(bound = "AF: AllocatedField<P::BaseField>, P: QuadExtParameters"),
-    Clone(bound = "AF: AllocatedField<P::BaseField>, P: QuadExtParameters")
+    Debug(bound = "AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>"),
+    Clone(bound = "AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>")
 )]
 #[must_use]
-pub struct AllocatedQuadExt<AF: AllocatedField<P::BaseField>, P: QuadExtParameters> {
+pub struct AllocatedQuadExt<AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>> {
     pub c0: AF,
     pub c1: AF,
     #[derivative(Debug = "ignore")]
     _params: PhantomData<P>,
 }
 
-impl<AF: AllocatedField<P::BaseField>, P: QuadExtParameters> AllocatedQuadExt<AF, P> {
-    fn one(cs: ConstraintSystemRef<AF::ConstraintF>) -> Result<Self, SynthesisError> {
+pub trait AllocatedQuadExtParams<AF: AllocatedField<Self::BaseField>>: QuadExtParameters {
+    fn mul_base_field_var_by_frob_coeff(fe: &mut AF, power: usize);
+}
+
+impl<AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>> AllocatedQuadExt<AF, P> {
+    pub(crate) fn one(cs: ConstraintSystemRef<AF::ConstraintF>) -> Result<Self, SynthesisError> {
         Self::alloc_constant(cs, QuadExtField::one())
     }
 
@@ -94,7 +98,7 @@ impl<AF: AllocatedField<P::BaseField>, P: QuadExtParameters> AllocatedQuadExt<AF
 impl<AF, P> R1CSVar<AF::ConstraintF> for AllocatedQuadExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: QuadExtParameters,
+    P: AllocatedQuadExtParams<AF>,
 {
     fn cs(&self) -> Option<ConstraintSystemRef<AF::ConstraintF>> {
         [&self.c0, &self.c1].cs()
@@ -104,7 +108,7 @@ where
 impl<AF, P> From<Boolean<AF::ConstraintF>> for AllocatedQuadExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: QuadExtParameters,
+    P: AllocatedQuadExtParams<AF>,
 {
     fn from(other: Boolean<AF::ConstraintF>) -> Self {
         if let Some(cs) = other.cs() {
@@ -119,14 +123,14 @@ where
 
 impl<AF, P> AllocatedField<QuadExtField<P>> for AllocatedQuadExt<AF, P>
 where
-    AF: AllocatedField<P::BaseField> + core::ops::MulAssign<P::FrobCoeff>,
+    AF: AllocatedField<P::BaseField>,
     for<'b> &'b AF: core::ops::Add<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Sub<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Mul<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Add<P::BaseField, Output = AF>,
     for<'b> &'b AF: core::ops::Sub<P::BaseField, Output = AF>,
     for<'b> &'b AF: core::ops::Mul<P::BaseField, Output = AF>,
-    P: QuadExtParameters,
+    P: AllocatedQuadExtParams<AF>,
 {
     type ConstraintF = AF::ConstraintF;
 
@@ -213,7 +217,7 @@ where
         let mut result = self.clone();
         result.c0.frobenius_map_in_place(power)?;
         result.c1.frobenius_map_in_place(power)?;
-        result.c1 *= P::FROBENIUS_COEFF_C1[power % 2];
+        P::mul_base_field_var_by_frob_coeff(&mut result.c1, power);
         Ok(result)
     }
 
@@ -245,7 +249,7 @@ impl_bounded_ops!(
         let c1 = &this.c1 + other.c1;
         AllocatedQuadExt::new(c0, c1)
     },
-    (AF: AllocatedField<P::BaseField> + core::ops::MulAssign<P::FrobCoeff>, P: QuadExtParameters),
+    (AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>),
     for<'b> &'b AF: core::ops::Add<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Sub<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Mul<&'b AF, Output = AF>,
@@ -271,7 +275,7 @@ impl_bounded_ops!(
         let c1 = &this.c1 - other.c1;
         AllocatedQuadExt::new(c0, c1)
     },
-    (AF: AllocatedField<P::BaseField> + core::ops::MulAssign<P::FrobCoeff>, P: QuadExtParameters),
+    (AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>),
     for<'b> &'b AF: core::ops::Add<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Sub<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Mul<&'b AF, Output = AF>,
@@ -327,7 +331,7 @@ impl_bounded_ops!(
         let c1 = (a0 * b1) + &(a1 * b0);
         AllocatedQuadExt::new(c0, c1)
     },
-    (AF: AllocatedField<P::BaseField> + core::ops::MulAssign<P::FrobCoeff>, P: QuadExtParameters),
+    (AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>),
     for<'b> &'b AF: core::ops::Add<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Sub<&'b AF, Output = AF>,
     for<'b> &'b AF: core::ops::Mul<&'b AF, Output = AF>,
@@ -339,7 +343,7 @@ impl_bounded_ops!(
 impl<AF, P> EqGadget<AF::ConstraintF> for AllocatedQuadExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: QuadExtParameters,
+    P: AllocatedQuadExtParams<AF>,
 {
     fn is_eq(&self, other: &Self) -> Result<Boolean<AF::ConstraintF>, SynthesisError> {
         let b0 = self.c0.is_eq(&other.c0)?;
@@ -374,7 +378,7 @@ where
 impl<AF, P> ToBitsGadget<AF::ConstraintF> for AllocatedQuadExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: QuadExtParameters,
+    P: AllocatedQuadExtParams<AF>,
 {
     fn to_bits(&self) -> Result<Vec<Boolean<AF::ConstraintF>>, SynthesisError> {
         let mut c0 = self.c0.to_bits()?;
@@ -394,7 +398,7 @@ where
 impl<AF, P> ToBytesGadget<AF::ConstraintF> for AllocatedQuadExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: QuadExtParameters,
+    P: AllocatedQuadExtParams<AF>,
 {
     fn to_bytes(&self) -> Result<Vec<UInt8<AF::ConstraintF>>, SynthesisError> {
         let mut c0 = self.c0.to_bytes()?;
@@ -414,7 +418,7 @@ where
 impl<AF, P> CondSelectGadget<AF::ConstraintF> for AllocatedQuadExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: QuadExtParameters,
+    P: AllocatedQuadExtParams<AF>,
 {
     #[inline]
     fn conditionally_select(
@@ -435,7 +439,7 @@ where
             <AF as AllocatedField<P::BaseField>>::ConstraintF,
             TableConstant = P::BaseField,
         >,
-    P: QuadExtParameters,
+    P: AllocatedQuadExtParams<AF>,
 {
     type TableConstant = QuadExtField<P>;
 
@@ -458,7 +462,7 @@ where
             <AF as AllocatedField<P::BaseField>>::ConstraintF,
             TableConstant = P::BaseField,
         >,
-    P: QuadExtParameters,
+    P: AllocatedQuadExtParams<AF>,
 {
     type TableConstant = QuadExtField<P>;
 
@@ -478,7 +482,7 @@ where
 impl<AF, P> AllocVar<QuadExtField<P>, AF::ConstraintF> for AllocatedQuadExt<AF, P>
 where
     AF: AllocatedField<P::BaseField>,
-    P: QuadExtParameters,
+    P: AllocatedQuadExtParams<AF>,
 {
     #[inline]
     fn alloc_constant(
@@ -541,19 +545,3 @@ where
         Ok(Self::new(c0, c1))
     }
 }
-
-// impl<'a, AF, P> core::ops::Mul<P::BasePrimeField> for &'a AllocatedQuadExt<AF, P>
-// where
-//     AF: AllocatedField<P::BaseField>,
-//     for<'b> &'b AF: core::ops::Mul<P::BasePrimeField, Output = AF>,
-//     P: QuadExtParameters,
-// {
-//     type Output = AllocatedQuadExt<AF, P>;
-
-//     fn mul(self, other: P::BasePrimeField) -> Self::Output {
-//         let result = self.clone();
-//         result.c0 = &self.c0 * other;
-//         result.c1 = &self.c1 * other;
-//         result
-//     }
-// }

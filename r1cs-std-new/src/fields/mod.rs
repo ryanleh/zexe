@@ -9,16 +9,16 @@ use crate::{prelude::*, Assignment};
 
 #[macro_use]
 pub mod macros;
-pub mod fp;
-// pub mod field_var;
-// pub mod fp12;
-// pub mod fp2;
 pub mod cubic_extension;
+pub mod field_var;
+pub mod fp;
+pub mod fp12;
+pub mod fp2;
+pub mod fp3;
+pub mod fp4;
+pub mod fp6_2over3;
+pub mod fp6_3over2;
 pub mod quadratic_extension;
-// pub mod fp3;
-// pub mod fp4;
-// pub mod fp6_2over3;
-// pub mod fp6_3over2;
 
 pub trait AllocatedField<F: Field>:
     Sized

@@ -415,14 +415,14 @@ where
     /// form.
     fn to_bits(&self) -> Result<Vec<Boolean<ConstraintF>>, SynthesisError> {
         match self {
-            Self::Constant(_) => todo!(), //Ok(UInt8::constant_vec(&to_bytes![c]?)),
+            Self::Constant(c) => UInt8::constant_vec(&to_bytes![c]?).to_bits(),
             Self::Var(v) => v.to_bits(),
         }
     }
 
     fn to_non_unique_bits(&self) -> Result<Vec<Boolean<ConstraintF>>, SynthesisError> {
         match self {
-            Self::Constant(_) => todo!(), //Ok(UInt8::constant_vec(&to_bytes![c]?)),
+            Self::Constant(c) => UInt8::constant_vec(&to_bytes![c]?).to_non_unique_bits(),
             Self::Var(v) => v.to_non_unique_bits(),
         }
     }

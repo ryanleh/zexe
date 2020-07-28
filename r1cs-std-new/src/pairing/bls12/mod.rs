@@ -54,7 +54,7 @@ impl<P: Bls12Parameters> PairingGadget<P> {
         mut cs: CS,
         f: &Fp12Gadget<P::Fp12Params, P::Fp>,
     ) -> Result<Fp12Gadget<P::Fp12Params, P::Fp>, SynthesisError> {
-        let mut result = f.cyclotomic_exp(cs.ns(|| "exp_by_x"), P::X)?;
+        let mut result = f.optimized_cyclotomic_exp(cs.ns(|| "exp_by_x"), P::X)?;
         if P::X_IS_NEGATIVE {
             result.conjugate_in_place(cs.ns(|| "conjugate"))?;
         }
