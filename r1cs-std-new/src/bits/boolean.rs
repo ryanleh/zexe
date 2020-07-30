@@ -445,7 +445,11 @@ impl<F: Field> Boolean<F> {
         Ok(current_run)
     }
 
-    fn select<T: CondSelectGadget<F>>(&self, first: &T, second: &T) -> Result<T, SynthesisError> {
+    pub fn select<T: CondSelectGadget<F>>(
+        &self,
+        first: &T,
+        second: &T,
+    ) -> Result<T, SynthesisError> {
         T::conditionally_select(&self, first, second)
     }
 }
