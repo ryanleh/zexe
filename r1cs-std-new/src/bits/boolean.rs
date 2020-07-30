@@ -13,8 +13,7 @@ pub struct AllocatedBit<F: Field> {
     cs: ConstraintSystemRef<F>,
 }
 
-// TODO: bool to field
-fn bool_to_f<F: Field>(val: bool) -> F {
+pub(crate) fn bool_to_field<F: Field>(val: bool) -> F {
     if val {
         F::one()
     } else {
@@ -149,7 +148,7 @@ impl<F: Field> AllocVar<bool, F> for AllocatedBit<F> {
             let mut value = None;
             let val_generator = || {
                 value = Some(*f()?.borrow());
-                value.get().map(bool_to_f)
+                value.get().map(bool_to_field)
             };
             let variable = if mode == AllocationMode::Input {
                 cs.new_input_variable(val_generator)?
@@ -445,6 +444,10 @@ impl<F: Field> Boolean<F> {
 
         Ok(current_run)
     }
+
+    fn select<T: CondSelectGadget<F>>(&self, first: &T, second: &T) -> Result<T, SynthesisError> {
+        T::conditionally_select(&self, first, second)
+    }
 }
 
 impl<F: Field> From<AllocatedBit<F>> for Boolean<F> {
@@ -484,7 +487,8 @@ impl<F: Field> EqGadget<F> for Boolean<F> {
 
                 let multiplier = cs.new_witness_variable(|| {
                     if is_equal.value()? {
-                        let diff = bool_to_f::<F>(self.value()?) - bool_to_f::<F>(other.value()?);
+                        let diff =
+                            bool_to_field::<F>(self.value()?) - bool_to_field::<F>(other.value()?);
                         diff.inverse().ok_or(SynthesisError::AssignmentMissing)
                     } else {
                         Ok(F::zero())
@@ -543,9 +547,9 @@ impl<F: Field> EqGadget<F> for Boolean<F> {
         use Boolean::*;
         let one = Variable::One;
         let difference = match (self, other) {
-            // 1 == 1; 0 == 0
-            (Constant(true), Constant(true)) | (Constant(false), Constant(false)) => return Ok(()),
-            // false != true
+            // 1 != 0; 0 != 1
+            (Constant(true), Constant(false)) | (Constant(false), Constant(true)) => return Ok(()),
+            // false == false and true == true
             (Constant(_), Constant(_)) => return Err(SynthesisError::AssignmentMissing),
             // 1 - a
             (Constant(true), Is(a)) | (Is(a), Constant(true)) => lc!() + one - a.variable(),
@@ -630,200 +634,134 @@ impl<F: Field> CondSelectGadget<F> for Boolean<F> {
 #[cfg(test)]
 mod test {
     use super::{AllocatedBit, Boolean};
-    use crate::{prelude::*, test_constraint_system::TestConstraintSystem};
+    use crate::prelude::*;
     use algebra::{bls12_381::Fr, BitIterator, Field, One, PrimeField, UniformRand, Zero};
-    use core::str::FromStr;
-    use r1cs_core::ConstraintSystem;
+    use r1cs_core::{ConstraintSystem, ConstraintSystemRef, SynthesisError};
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;
 
     #[test]
-    fn test_boolean_to_byte() {
+    fn test_boolean_to_byte() -> Result<(), SynthesisError> {
         for val in [true, false].iter() {
-            let mut cs = TestConstraintSystem::<Fr>::new();
-            let a: Boolean<F> = AllocatedBit::alloc(&mut cs, || Ok(*val)).unwrap().into();
-            let bytes = a.to_bytes(&mut cs.ns(|| "ToBytes")).unwrap();
+            let cs = ConstraintSystem::<Fr>::new_ref();
+            let a = Boolean::new_witness(cs.clone(), || Ok(*val))?;
+            let bytes = a.to_bytes()?;
             assert_eq!(bytes.len(), 1);
             let byte = &bytes[0];
-            assert_eq!(byte.value.unwrap(), *val as u8);
+            assert_eq!(byte.value()?, *val as u8);
 
-            for (i, bit_gadget) in byte.bits.iter().enumerate() {
-                assert_eq!(
-                    bit_gadget.value().unwrap(),
-                    (byte.value.unwrap() >> i) & 1 == 1
-                );
+            for (i, bit) in byte.bits.iter().enumerate() {
+                assert_eq!(bit.value()?, (byte.value()? >> i) & 1 == 1);
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_allocated_bit() {
-        let mut cs = TestConstraintSystem::<Fr>::new();
+    fn test_xor() -> Result<(), SynthesisError> {
+        for a_val in [false, true].iter().copied() {
+            for b_val in [false, true].iter().copied() {
+                let cs = ConstraintSystem::<Fr>::new_ref();
+                let a = AllocatedBit::new_witness(cs.ns("a"), || Ok(a_val))?;
+                let b = AllocatedBit::new_witness(cs.ns("b"), || Ok(b_val))?;
+                let c = AllocatedBit::xor(&a, &b)?;
+                assert_eq!(c.value()?, a_val ^ b_val);
 
-        AllocatedBit::alloc(&mut cs, || Ok(true)).unwrap();
-        assert!(cs.get("boolean") == Fr::one());
-        assert!(cs.is_satisfied());
-        cs.set("boolean", Fr::zero());
-        assert!(cs.is_satisfied());
-        cs.set("boolean", Fr::from_str("2").unwrap());
-        assert!(!cs.is_satisfied());
-        assert!(cs.which_is_unsatisfied() == Some("boolean constraint"));
-    }
-
-    #[test]
-    fn test_xor() {
-        for a_val in [false, true].iter() {
-            for b_val in [false, true].iter() {
-                let mut cs = TestConstraintSystem::<Fr>::new();
-                let a = AllocatedBit::alloc(cs.ns(|| "a"), || Ok(*a_val)).unwrap();
-                let b = AllocatedBit::alloc(cs.ns(|| "b"), || Ok(*b_val)).unwrap();
-                let c = AllocatedBit::xor(&mut cs, &a, &b).unwrap();
-                assert_eq!(c.value.unwrap(), *a_val ^ *b_val);
-
-                assert!(cs.is_satisfied());
+                assert!(cs.is_satisfied().unwrap());
+                assert_eq!(a.value()?, (a_val));
+                assert_eq!(b.value()?, (b_val));
+                assert_eq!(c.value()?, (a_val ^ b_val));
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_or() {
-        for a_val in [false, true].iter() {
-            for b_val in [false, true].iter() {
-                let mut cs = TestConstraintSystem::<Fr>::new();
-                let a = AllocatedBit::alloc(cs.ns(|| "a"), || Ok(*a_val)).unwrap();
-                let b = AllocatedBit::alloc(cs.ns(|| "b"), || Ok(*b_val)).unwrap();
-                let c = AllocatedBit::or(&mut cs, &a, &b).unwrap();
-                assert_eq!(c.value.unwrap(), *a_val | *b_val);
+    fn test_or() -> Result<(), SynthesisError> {
+        for a_val in [false, true].iter().copied() {
+            for b_val in [false, true].iter().copied() {
+                let cs = ConstraintSystem::<Fr>::new_ref();
+                let a = AllocatedBit::new_witness(cs.ns("a"), || Ok(a_val))?;
+                let b = AllocatedBit::new_witness(cs.ns("b"), || Ok(b_val))?;
+                let c = AllocatedBit::or(&a, &b)?;
+                assert_eq!(c.value()?, a_val | b_val);
 
-                assert!(cs.is_satisfied());
-                assert!(cs.get("a/boolean") == if *a_val { Fr::one() } else { Fr::zero() });
-                assert!(cs.get("b/boolean") == if *b_val { Fr::one() } else { Fr::zero() });
+                assert!(cs.is_satisfied().unwrap());
+                assert_eq!(a.value()?, (a_val));
+                assert_eq!(b.value()?, (b_val));
+                assert_eq!(c.value()?, (a_val | b_val));
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_and() {
-        for a_val in [false, true].iter() {
-            for b_val in [false, true].iter() {
-                let mut cs = TestConstraintSystem::<Fr>::new();
-                let a = AllocatedBit::alloc(cs.ns(|| "a"), || Ok(*a_val)).unwrap();
-                let b = AllocatedBit::alloc(cs.ns(|| "b"), || Ok(*b_val)).unwrap();
-                let c = AllocatedBit::and(&mut cs, &a, &b).unwrap();
-                assert_eq!(c.value.unwrap(), *a_val & *b_val);
+    fn test_and() -> Result<(), SynthesisError> {
+        for a_val in [false, true].iter().copied() {
+            for b_val in [false, true].iter().copied() {
+                let cs = ConstraintSystem::<Fr>::new_ref();
+                let a = AllocatedBit::new_witness(cs.ns("a"), || Ok(a_val))?;
+                let b = AllocatedBit::new_witness(cs.ns("b"), || Ok(b_val))?;
+                let c = AllocatedBit::and(&a, &b)?;
+                assert_eq!(c.value()?, a_val & b_val);
 
-                assert!(cs.is_satisfied());
-                assert!(cs.get("a/boolean") == if *a_val { Fr::one() } else { Fr::zero() });
-                assert!(cs.get("b/boolean") == if *b_val { Fr::one() } else { Fr::zero() });
-                assert!(
-                    cs.get("and result")
-                        == if *a_val & *b_val {
-                            Fr::one()
-                        } else {
-                            Fr::zero()
-                        }
-                );
-
-                // Invert the result and check if the constraint system is still satisfied
-                cs.set(
-                    "and result",
-                    if *a_val & *b_val {
-                        Fr::zero()
-                    } else {
-                        Fr::one()
-                    },
-                );
-                assert!(!cs.is_satisfied());
+                assert!(cs.is_satisfied().unwrap());
+                assert_eq!(a.value()?, (a_val));
+                assert_eq!(b.value()?, (b_val));
+                assert_eq!(c.value()?, (a_val & b_val));
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_and_not() {
-        for a_val in [false, true].iter() {
-            for b_val in [false, true].iter() {
-                let mut cs = TestConstraintSystem::<Fr>::new();
-                let a = AllocatedBit::alloc(cs.ns(|| "a"), || Ok(*a_val)).unwrap();
-                let b = AllocatedBit::alloc(cs.ns(|| "b"), || Ok(*b_val)).unwrap();
-                let c = AllocatedBit::and_not(&mut cs, &a, &b).unwrap();
-                assert_eq!(c.value.unwrap(), *a_val & !*b_val);
+    fn test_and_not() -> Result<(), SynthesisError> {
+        for a_val in [false, true].iter().copied() {
+            for b_val in [false, true].iter().copied() {
+                let cs = ConstraintSystem::<Fr>::new_ref();
+                let a = AllocatedBit::new_witness(cs.ns("a"), || Ok(a_val))?;
+                let b = AllocatedBit::new_witness(cs.ns("b"), || Ok(b_val))?;
+                let c = AllocatedBit::and_not(&a, &b)?;
+                assert_eq!(c.value()?, a_val & !b_val);
 
-                assert!(cs.is_satisfied());
-                assert!(cs.get("a/boolean") == if *a_val { Fr::one() } else { Fr::zero() });
-                assert!(cs.get("b/boolean") == if *b_val { Fr::one() } else { Fr::zero() });
-                assert!(
-                    cs.get("and not result")
-                        == if *a_val & !*b_val {
-                            Fr::one()
-                        } else {
-                            Fr::zero()
-                        }
-                );
-
-                // Invert the result and check if the constraint system is still satisfied
-                cs.set(
-                    "and not result",
-                    if *a_val & !*b_val {
-                        Fr::zero()
-                    } else {
-                        Fr::one()
-                    },
-                );
-                assert!(!cs.is_satisfied());
+                assert!(cs.is_satisfied().unwrap());
+                assert_eq!(a.value()?, (a_val));
+                assert_eq!(b.value()?, (b_val));
+                assert_eq!(c.value()?, (a_val & !b_val));
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_nor() {
-        for a_val in [false, true].iter() {
-            for b_val in [false, true].iter() {
-                let mut cs = TestConstraintSystem::<Fr>::new();
-                let a = AllocatedBit::alloc(cs.ns(|| "a"), || Ok(*a_val)).unwrap();
-                let b = AllocatedBit::alloc(cs.ns(|| "b"), || Ok(*b_val)).unwrap();
-                let c = AllocatedBit::nor(&mut cs, &a, &b).unwrap();
-                assert_eq!(c.value.unwrap(), !*a_val & !*b_val);
+    fn test_nor() -> Result<(), SynthesisError> {
+        for a_val in [false, true].iter().copied() {
+            for b_val in [false, true].iter().copied() {
+                let cs = ConstraintSystem::<Fr>::new_ref();
+                let a = AllocatedBit::new_witness(cs.ns("a"), || Ok(a_val))?;
+                let b = AllocatedBit::new_witness(cs.ns("b"), || Ok(b_val))?;
+                let c = AllocatedBit::nor(&a, &b)?;
+                assert_eq!(c.value()?, !a_val & !b_val);
 
-                assert!(cs.is_satisfied());
-                assert!(cs.get("a/boolean") == if *a_val { Fr::one() } else { Fr::zero() });
-                assert!(cs.get("b/boolean") == if *b_val { Fr::one() } else { Fr::zero() });
-                assert!(
-                    cs.get("nor result")
-                        == if !*a_val & !*b_val {
-                            Fr::one()
-                        } else {
-                            Fr::zero()
-                        }
-                );
-
-                // Invert the result and check if the constraint system is still satisfied
-                cs.set(
-                    "nor result",
-                    if !*a_val & !*b_val {
-                        Fr::zero()
-                    } else {
-                        Fr::one()
-                    },
-                );
-                assert!(!cs.is_satisfied());
+                assert!(cs.is_satisfied().unwrap());
+                assert_eq!(a.value()?, (a_val));
+                assert_eq!(b.value()?, (b_val));
+                assert_eq!(c.value()?, (!a_val & !b_val));
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_enforce_equal() {
+    fn test_enforce_equal() -> Result<(), SynthesisError> {
         for a_bool in [false, true].iter().cloned() {
             for b_bool in [false, true].iter().cloned() {
                 for a_neg in [false, true].iter().cloned() {
                     for b_neg in [false, true].iter().cloned() {
-                        let mut cs = TestConstraintSystem::<Fr>::new();
+                        let cs = ConstraintSystem::<Fr>::new_ref();
 
-                        let mut a: Boolean<F> = AllocatedBit::alloc(cs.ns(|| "a"), || Ok(a_bool))
-                            .unwrap()
-                            .into();
-                        let mut b: Boolean<F> = AllocatedBit::alloc(cs.ns(|| "b"), || Ok(b_bool))
-                            .unwrap()
-                            .into();
+                        let mut a = Boolean::new_witness(cs.ns("a"), || Ok(a_bool))?;
+                        let mut b = Boolean::new_witness(cs.ns("b"), || Ok(b_bool))?;
 
                         if a_neg {
                             a = a.not();
@@ -832,31 +770,31 @@ mod test {
                             b = b.not();
                         }
 
-                        a.enforce_equal(&mut cs, &b).unwrap();
+                        a.enforce_equal(&b)?;
 
-                        assert_eq!(cs.is_satisfied(), (a_bool ^ a_neg) == (b_bool ^ b_neg));
+                        assert_eq!(
+                            cs.is_satisfied().unwrap(),
+                            (a_bool ^ a_neg) == (b_bool ^ b_neg)
+                        );
                     }
                 }
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_conditional_enforce_equal() {
+    fn test_conditional_enforce_equal() -> Result<(), SynthesisError> {
         for a_bool in [false, true].iter().cloned() {
             for b_bool in [false, true].iter().cloned() {
                 for a_neg in [false, true].iter().cloned() {
                     for b_neg in [false, true].iter().cloned() {
-                        let mut cs = TestConstraintSystem::<Fr>::new();
+                        let cs = ConstraintSystem::<Fr>::new_ref();
 
                         // First test if constraint system is satisfied
                         // when we do want to enforce the condition.
-                        let mut a: Boolean<F> = AllocatedBit::alloc(cs.ns(|| "a"), || Ok(a_bool))
-                            .unwrap()
-                            .into();
-                        let mut b: Boolean<F> = AllocatedBit::alloc(cs.ns(|| "b"), || Ok(b_bool))
-                            .unwrap()
-                            .into();
+                        let mut a = Boolean::new_witness(cs.clone(), || Ok(a_bool))?;
+                        let mut b = Boolean::new_witness(cs.clone(), || Ok(b_bool))?;
 
                         if a_neg {
                             a = a.not();
@@ -865,21 +803,19 @@ mod test {
                             b = b.not();
                         }
 
-                        a.conditional_enforce_equal(&mut cs, &b, &Boolean::constant(true))
-                            .unwrap();
+                        a.conditional_enforce_equal(&b, &Boolean::constant(true))?;
 
-                        assert_eq!(cs.is_satisfied(), (a_bool ^ a_neg) == (b_bool ^ b_neg));
+                        assert_eq!(
+                            cs.is_satisfied().unwrap(),
+                            (a_bool ^ a_neg) == (b_bool ^ b_neg)
+                        );
 
                         // Now test if constraint system is satisfied even
                         // when we don't want to enforce the condition.
-                        let mut cs = TestConstraintSystem::<Fr>::new();
+                        let cs = ConstraintSystem::<Fr>::new_ref();
 
-                        let mut a: Boolean<F> = AllocatedBit::alloc(cs.ns(|| "a"), || Ok(a_bool))
-                            .unwrap()
-                            .into();
-                        let mut b: Boolean<F> = AllocatedBit::alloc(cs.ns(|| "b"), || Ok(b_bool))
-                            .unwrap()
-                            .into();
+                        let mut a = Boolean::new_witness(cs.ns("a"), || Ok(a_bool))?;
+                        let mut b = Boolean::new_witness(cs.ns("b"), || Ok(b_bool))?;
 
                         if a_neg {
                             a = a.not();
@@ -888,68 +824,43 @@ mod test {
                             b = b.not();
                         }
 
-                        let false_cond = AllocatedBit::alloc(cs.ns(|| "cond"), || Ok(false))
-                            .unwrap()
-                            .into();
-                        a.conditional_enforce_equal(&mut cs, &b, &false_cond)
-                            .unwrap();
+                        let false_cond = Boolean::new_witness(cs.ns("cond"), || Ok(false))?;
+                        a.conditional_enforce_equal(&b, &false_cond)?;
 
-                        assert!(cs.is_satisfied());
+                        assert!(cs.is_satisfied().unwrap());
                     }
                 }
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_boolean_negation() {
-        let mut cs = TestConstraintSystem::<Fr>::new();
+    fn test_boolean_negation() -> Result<(), SynthesisError> {
+        let cs = ConstraintSystem::<Fr>::new_ref();
 
-        let mut b = Boolean::from(AllocatedBit::alloc(&mut cs, || Ok(true)).unwrap());
-
-        match b {
-            Boolean::Is(_) => {}
-            _ => panic!("unexpected value"),
-        }
+        let mut b = Boolean::new_witness(cs.clone(), || Ok(true))?;
+        assert!(matches!(b, Boolean::Is(_)));
 
         b = b.not();
-
-        match b {
-            Boolean::Not(_) => {}
-            _ => panic!("unexpected value"),
-        }
+        assert!(matches!(b, Boolean::Not(_)));
 
         b = b.not();
+        assert!(matches!(b, Boolean::Is(_)));
 
-        match b {
-            Boolean::Is(_) => {}
-            _ => panic!("unexpected value"),
-        }
-
-        b = Boolean::constant(true);
-
-        match b {
-            Boolean::Constant(true) => {}
-            _ => panic!("unexpected value"),
-        }
+        b = Boolean::Constant(true);
+        assert!(matches!(b, Boolean::Constant(true)));
 
         b = b.not();
-
-        match b {
-            Boolean::Constant(false) => {}
-            _ => panic!("unexpected value"),
-        }
+        assert!(matches!(b, Boolean::Constant(false)));
 
         b = b.not();
-
-        match b {
-            Boolean::Constant(true) => {}
-            _ => panic!("unexpected value"),
-        }
+        assert!(matches!(b, Boolean::Constant(true)));
+        Ok(())
     }
 
-    #[derive(Copy, Clone, Debug)]
-    enum OperandType {
+    #[derive(Eq, PartialEq, Copy, Clone, Debug)]
+    enum OpType {
         True,
         False,
         AllocatedTrue,
@@ -958,489 +869,304 @@ mod test {
         NegatedAllocatedFalse,
     }
 
-    #[test]
-    fn test_boolean_xor() {
-        let variants = [
-            OperandType::True,
-            OperandType::False,
-            OperandType::AllocatedTrue,
-            OperandType::AllocatedFalse,
-            OperandType::NegatedAllocatedTrue,
-            OperandType::NegatedAllocatedFalse,
-        ];
+    const VARIANTS: [OpType; 6] = [
+        OpType::True,
+        OpType::False,
+        OpType::AllocatedTrue,
+        OpType::AllocatedFalse,
+        OpType::NegatedAllocatedTrue,
+        OpType::NegatedAllocatedFalse,
+    ];
 
-        for first_operand in variants.iter().cloned() {
-            for second_operand in variants.iter().cloned() {
-                let mut cs = TestConstraintSystem::<Fr>::new();
+    fn construct<F: Field>(
+        cs: ConstraintSystemRef<F>,
+        operand: OpType,
+        name: &'static str,
+    ) -> Result<Boolean<F>, SynthesisError> {
+        let cs = cs.ns(name);
 
-                let a;
-                let b;
-
-                {
-                    let mut dyn_construct = |operand, name| {
-                        let cs = cs.ns(|| name);
-
-                        match operand {
-                            OperandType::True => Boolean::constant(true),
-                            OperandType::False => Boolean::constant(false),
-                            OperandType::AllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(cs, || Ok(true)).unwrap())
-                            }
-                            OperandType::AllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(cs, || Ok(false)).unwrap())
-                            }
-                            OperandType::NegatedAllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(cs, || Ok(true)).unwrap()).not()
-                            }
-                            OperandType::NegatedAllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(cs, || Ok(false)).unwrap()).not()
-                            }
-                        }
-                    };
-
-                    a = dyn_construct(first_operand, "a");
-                    b = dyn_construct(second_operand, "b");
-                }
-
-                let c = Boolean::xor(&mut cs, &a, &b).unwrap();
-
-                assert!(cs.is_satisfied());
-
-                match (first_operand, second_operand, c) {
-                    (OperandType::True, OperandType::True, Boolean::Constant(false)) => {}
-                    (OperandType::True, OperandType::False, Boolean::Constant(true)) => {}
-                    (OperandType::True, OperandType::AllocatedTrue, Boolean::Not(_)) => {}
-                    (OperandType::True, OperandType::AllocatedFalse, Boolean::Not(_)) => {}
-                    (OperandType::True, OperandType::NegatedAllocatedTrue, Boolean::Is(_)) => {}
-                    (OperandType::True, OperandType::NegatedAllocatedFalse, Boolean::Is(_)) => {}
-
-                    (OperandType::False, OperandType::True, Boolean::Constant(true)) => {}
-                    (OperandType::False, OperandType::False, Boolean::Constant(false)) => {}
-                    (OperandType::False, OperandType::AllocatedTrue, Boolean::Is(_)) => {}
-                    (OperandType::False, OperandType::AllocatedFalse, Boolean::Is(_)) => {}
-                    (OperandType::False, OperandType::NegatedAllocatedTrue, Boolean::Not(_)) => {}
-                    (OperandType::False, OperandType::NegatedAllocatedFalse, Boolean::Not(_)) => {}
-
-                    (OperandType::AllocatedTrue, OperandType::True, Boolean::Not(_)) => {}
-                    (OperandType::AllocatedTrue, OperandType::False, Boolean::Is(_)) => {}
-                    (
-                        OperandType::AllocatedTrue,
-                        OperandType::AllocatedTrue,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::AllocatedTrue,
-                        OperandType::AllocatedFalse,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::one());
-                        assert_eq!(v.value, Some(true));
-                    }
-                    (
-                        OperandType::AllocatedTrue,
-                        OperandType::NegatedAllocatedTrue,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::AllocatedTrue,
-                        OperandType::NegatedAllocatedFalse,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::one());
-                        assert_eq!(v.value, Some(true));
-                    }
-
-                    (OperandType::AllocatedFalse, OperandType::True, Boolean::Not(_)) => {}
-                    (OperandType::AllocatedFalse, OperandType::False, Boolean::Is(_)) => {}
-                    (
-                        OperandType::AllocatedFalse,
-                        OperandType::AllocatedTrue,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::one());
-                        assert_eq!(v.value, Some(true));
-                    }
-                    (
-                        OperandType::AllocatedFalse,
-                        OperandType::AllocatedFalse,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::AllocatedFalse,
-                        OperandType::NegatedAllocatedTrue,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::one());
-                        assert_eq!(v.value, Some(true));
-                    }
-                    (
-                        OperandType::AllocatedFalse,
-                        OperandType::NegatedAllocatedFalse,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
-                    }
-
-                    (OperandType::NegatedAllocatedTrue, OperandType::True, Boolean::Is(_)) => {}
-                    (OperandType::NegatedAllocatedTrue, OperandType::False, Boolean::Not(_)) => {}
-                    (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::AllocatedTrue,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::AllocatedFalse,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::one());
-                        assert_eq!(v.value, Some(true));
-                    }
-                    (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::NegatedAllocatedTrue,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::NegatedAllocatedFalse,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::one());
-                        assert_eq!(v.value, Some(true));
-                    }
-
-                    (OperandType::NegatedAllocatedFalse, OperandType::True, Boolean::Is(_)) => {}
-                    (OperandType::NegatedAllocatedFalse, OperandType::False, Boolean::Not(_)) => {}
-                    (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::AllocatedTrue,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::one());
-                        assert_eq!(v.value, Some(true));
-                    }
-                    (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::AllocatedFalse,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::NegatedAllocatedTrue,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::one());
-                        assert_eq!(v.value, Some(true));
-                    }
-                    (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::NegatedAllocatedFalse,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("xor result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
-                    }
-
-                    _ => panic!("this should never be encountered"),
-                }
-            }
-        }
+        let b = match operand {
+            OpType::True => Boolean::constant(true),
+            OpType::False => Boolean::constant(false),
+            OpType::AllocatedTrue => Boolean::new_witness(cs, || Ok(true))?,
+            OpType::AllocatedFalse => Boolean::new_witness(cs, || Ok(false))?,
+            OpType::NegatedAllocatedTrue => Boolean::new_witness(cs, || Ok(true))?.not(),
+            OpType::NegatedAllocatedFalse => Boolean::new_witness(cs, || Ok(false))?.not(),
+        };
+        Ok(b)
     }
 
     #[test]
-    fn test_boolean_cond_select() {
-        let variants = [
-            OperandType::True,
-            OperandType::False,
-            OperandType::AllocatedTrue,
-            OperandType::AllocatedFalse,
-            OperandType::NegatedAllocatedTrue,
-            OperandType::NegatedAllocatedFalse,
-        ];
+    fn test_boolean_xor() -> Result<(), SynthesisError> {
+        for first_operand in VARIANTS.iter().cloned() {
+            for second_operand in VARIANTS.iter().cloned() {
+                let cs = ConstraintSystem::<Fr>::new_ref();
 
-        for condition in variants.iter().cloned() {
-            for first_operand in variants.iter().cloned() {
-                for second_operand in variants.iter().cloned() {
-                    let mut cs = TestConstraintSystem::<Fr>::new();
+                let a = construct(cs.clone(), first_operand, "a")?;
+                let b = construct(cs.clone(), second_operand, "b")?;
+                let c = Boolean::xor(&a, &b)?;
 
-                    let cond;
-                    let a;
-                    let b;
+                assert!(cs.is_satisfied().unwrap());
 
-                    {
-                        let mut dyn_construct = |operand, name| {
-                            let cs = cs.ns(|| name);
+                match (first_operand, second_operand, c) {
+                    (OpType::True, OpType::True, Boolean::Constant(false)) => (),
+                    (OpType::True, OpType::False, Boolean::Constant(true)) => (),
+                    (OpType::True, OpType::AllocatedTrue, Boolean::Not(_)) => (),
+                    (OpType::True, OpType::AllocatedFalse, Boolean::Not(_)) => (),
+                    (OpType::True, OpType::NegatedAllocatedTrue, Boolean::Is(_)) => (),
+                    (OpType::True, OpType::NegatedAllocatedFalse, Boolean::Is(_)) => (),
 
-                            match operand {
-                                OperandType::True => Boolean::constant(true),
-                                OperandType::False => Boolean::constant(false),
-                                OperandType::AllocatedTrue => {
-                                    Boolean::from(AllocatedBit::alloc(cs, || Ok(true)).unwrap())
-                                }
-                                OperandType::AllocatedFalse => {
-                                    Boolean::from(AllocatedBit::alloc(cs, || Ok(false)).unwrap())
-                                }
-                                OperandType::NegatedAllocatedTrue => {
-                                    Boolean::from(AllocatedBit::alloc(cs, || Ok(true)).unwrap())
-                                        .not()
-                                }
-                                OperandType::NegatedAllocatedFalse => {
-                                    Boolean::from(AllocatedBit::alloc(cs, || Ok(false)).unwrap())
-                                        .not()
-                                }
-                            }
-                        };
+                    (OpType::False, OpType::True, Boolean::Constant(true)) => (),
+                    (OpType::False, OpType::False, Boolean::Constant(false)) => (),
+                    (OpType::False, OpType::AllocatedTrue, Boolean::Is(_)) => (),
+                    (OpType::False, OpType::AllocatedFalse, Boolean::Is(_)) => (),
+                    (OpType::False, OpType::NegatedAllocatedTrue, Boolean::Not(_)) => (),
+                    (OpType::False, OpType::NegatedAllocatedFalse, Boolean::Not(_)) => (),
 
-                        cond = dyn_construct(condition, "cond");
-                        a = dyn_construct(first_operand, "a");
-                        b = dyn_construct(second_operand, "b");
+                    (OpType::AllocatedTrue, OpType::True, Boolean::Not(_)) => (),
+                    (OpType::AllocatedTrue, OpType::False, Boolean::Is(_)) => (),
+                    (OpType::AllocatedTrue, OpType::AllocatedTrue, Boolean::Is(ref v)) => {
+                        assert_eq!(v.value(), Ok(false));
+                    }
+                    (OpType::AllocatedTrue, OpType::AllocatedFalse, Boolean::Is(ref v)) => {
+                        assert_eq!(v.value(), Ok(true));
+                    }
+                    (OpType::AllocatedTrue, OpType::NegatedAllocatedTrue, Boolean::Not(ref v)) => {
+                        assert_eq!(v.value(), Ok(false));
+                    }
+                    (OpType::AllocatedTrue, OpType::NegatedAllocatedFalse, Boolean::Not(ref v)) => {
+                        assert_eq!(v.value(), Ok(true));
+                    }
+                    (OpType::AllocatedFalse, OpType::True, Boolean::Not(_)) => (),
+                    (OpType::AllocatedFalse, OpType::False, Boolean::Is(_)) => (),
+                    (OpType::AllocatedFalse, OpType::AllocatedTrue, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::one());
+                        assert_eq!(v.value(), Ok(true));
+                    }
+                    (OpType::AllocatedFalse, OpType::AllocatedFalse, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
+                    }
+                    (OpType::AllocatedFalse, OpType::NegatedAllocatedTrue, Boolean::Not(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::one());
+                        assert_eq!(v.value(), Ok(true));
+                    }
+                    (
+                        OpType::AllocatedFalse,
+                        OpType::NegatedAllocatedFalse,
+                        Boolean::Not(ref v),
+                    ) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
                     }
 
-                    let before = cs.num_constraints();
-                    let c = Boolean::conditionally_select(&mut cs, &cond, &a, &b).unwrap();
-                    let after = cs.num_constraints();
+                    (OpType::NegatedAllocatedTrue, OpType::True, Boolean::Is(_)) => (),
+                    (OpType::NegatedAllocatedTrue, OpType::False, Boolean::Not(_)) => (),
+                    (OpType::NegatedAllocatedTrue, OpType::AllocatedTrue, Boolean::Not(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
+                    }
+                    (OpType::NegatedAllocatedTrue, OpType::AllocatedFalse, Boolean::Not(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::one());
+                        assert_eq!(v.value(), Ok(true));
+                    }
+                    (
+                        OpType::NegatedAllocatedTrue,
+                        OpType::NegatedAllocatedTrue,
+                        Boolean::Is(ref v),
+                    ) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
+                    }
+                    (
+                        OpType::NegatedAllocatedTrue,
+                        OpType::NegatedAllocatedFalse,
+                        Boolean::Is(ref v),
+                    ) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::one());
+                        assert_eq!(v.value(), Ok(true));
+                    }
+
+                    (OpType::NegatedAllocatedFalse, OpType::True, Boolean::Is(_)) => (),
+                    (OpType::NegatedAllocatedFalse, OpType::False, Boolean::Not(_)) => (),
+                    (OpType::NegatedAllocatedFalse, OpType::AllocatedTrue, Boolean::Not(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::one());
+                        assert_eq!(v.value(), Ok(true));
+                    }
+                    (
+                        OpType::NegatedAllocatedFalse,
+                        OpType::AllocatedFalse,
+                        Boolean::Not(ref v),
+                    ) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
+                    }
+                    (
+                        OpType::NegatedAllocatedFalse,
+                        OpType::NegatedAllocatedTrue,
+                        Boolean::Is(ref v),
+                    ) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::one());
+                        assert_eq!(v.value(), Ok(true));
+                    }
+                    (
+                        OpType::NegatedAllocatedFalse,
+                        OpType::NegatedAllocatedFalse,
+                        Boolean::Is(ref v),
+                    ) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
+                    }
+
+                    _ => unreachable!(),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_boolean_cond_select() -> Result<(), r1cs_core::SynthesisError> {
+        for condition in VARIANTS.iter().cloned() {
+            for first_operand in VARIANTS.iter().cloned() {
+                for second_operand in VARIANTS.iter().cloned() {
+                    let cs = ConstraintSystem::<Fr>::new_ref();
+
+                    let cond = construct(cs.clone(), condition, "cond")?;
+                    let a = construct(cs.clone(), first_operand, "a")?;
+                    let b = construct(cs.clone(), second_operand, "b")?;
+                    let c = cond.select(&a, &b)?;
 
                     assert!(
-                        cs.is_satisfied(),
+                        cs.is_satisfied().unwrap(),
                         "failed with operands: cond: {:?}, a: {:?}, b: {:?}",
                         condition,
                         first_operand,
                         second_operand,
                     );
                     assert_eq!(
-                        c.value(),
-                        if cond.value().unwrap() {
-                            a.value()
+                        c.value()?,
+                        if cond.value()? {
+                            a.value()?
                         } else {
-                            b.value()
+                            b.value()?
                         }
                     );
                 }
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_boolean_or() {
-        let variants = [
-            OperandType::True,
-            OperandType::False,
-            OperandType::AllocatedTrue,
-            OperandType::AllocatedFalse,
-            OperandType::NegatedAllocatedTrue,
-            OperandType::NegatedAllocatedFalse,
-        ];
+    fn test_boolean_or() -> Result<(), SynthesisError> {
+        for first_operand in VARIANTS.iter().cloned() {
+            for second_operand in VARIANTS.iter().cloned() {
+                let cs = ConstraintSystem::<Fr>::new_ref();
 
-        for first_operand in variants.iter().cloned() {
-            for second_operand in variants.iter().cloned() {
-                let mut cs = TestConstraintSystem::<Fr>::new();
+                let a = construct(cs.clone(), first_operand, "a")?;
+                let b = construct(cs.clone(), second_operand, "b")?;
+                let c = a.or(&b)?;
 
-                let a;
-                let b;
+                assert!(cs.is_satisfied().unwrap());
 
-                {
-                    let mut dyn_construct = |operand, name| {
-                        let cs = cs.ns(|| name);
+                match (first_operand, second_operand, c.clone()) {
+                    (OpType::True, OpType::True, Boolean::Constant(true)) => (),
+                    (OpType::True, OpType::False, Boolean::Constant(true)) => (),
+                    (OpType::True, OpType::AllocatedTrue, Boolean::Constant(true)) => (),
+                    (OpType::True, OpType::AllocatedFalse, Boolean::Constant(true)) => (),
+                    (OpType::True, OpType::NegatedAllocatedTrue, Boolean::Constant(true)) => (),
+                    (OpType::True, OpType::NegatedAllocatedFalse, Boolean::Constant(true)) => (),
 
-                        match operand {
-                            OperandType::True => Boolean::constant(true),
-                            OperandType::False => Boolean::constant(false),
-                            OperandType::AllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(cs, || Ok(true)).unwrap())
-                            }
-                            OperandType::AllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(cs, || Ok(false)).unwrap())
-                            }
-                            OperandType::NegatedAllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(cs, || Ok(true)).unwrap()).not()
-                            }
-                            OperandType::NegatedAllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(cs, || Ok(false)).unwrap()).not()
-                            }
-                        }
-                    };
+                    (OpType::False, OpType::True, Boolean::Constant(true)) => (),
+                    (OpType::False, OpType::False, Boolean::Constant(false)) => (),
+                    (OpType::False, OpType::AllocatedTrue, Boolean::Is(_)) => (),
+                    (OpType::False, OpType::AllocatedFalse, Boolean::Is(_)) => (),
+                    (OpType::False, OpType::NegatedAllocatedTrue, Boolean::Not(_)) => (),
+                    (OpType::False, OpType::NegatedAllocatedFalse, Boolean::Not(_)) => (),
 
-                    a = dyn_construct(first_operand, "a");
-                    b = dyn_construct(second_operand, "b");
-                }
+                    (OpType::AllocatedTrue, OpType::True, Boolean::Constant(true)) => (),
+                    (OpType::AllocatedTrue, OpType::False, Boolean::Is(_)) => (),
+                    (OpType::AllocatedTrue, OpType::AllocatedTrue, Boolean::Is(ref v)) => {
+                        assert_eq!(v.value(), Ok(true));
+                    }
+                    (OpType::AllocatedTrue, OpType::AllocatedFalse, Boolean::Is(ref v)) => {
+                        assert_eq!(v.value(), Ok(true));
+                    }
+                    (OpType::AllocatedTrue, OpType::NegatedAllocatedTrue, Boolean::Not(ref v)) => {
+                        assert_eq!(v.value(), Ok(false));
+                    }
+                    (OpType::AllocatedTrue, OpType::NegatedAllocatedFalse, Boolean::Not(ref v)) => {
+                        assert_eq!(v.value(), Ok(false));
+                    }
 
-                let c = Boolean::or(&mut cs, &a, &b).unwrap();
-
-                assert!(cs.is_satisfied());
-
-                match (first_operand, second_operand, c) {
-                    (OperandType::True, OperandType::True, Boolean::Constant(true)) => {}
-                    (OperandType::True, OperandType::False, Boolean::Constant(true)) => {}
-                    (OperandType::True, OperandType::AllocatedTrue, Boolean::Constant(true)) => {}
-                    (OperandType::True, OperandType::AllocatedFalse, Boolean::Constant(true)) => {}
-                    (
-                        OperandType::True,
-                        OperandType::NegatedAllocatedTrue,
-                        Boolean::Constant(true),
-                    ) => {}
-                    (
-                        OperandType::True,
-                        OperandType::NegatedAllocatedFalse,
-                        Boolean::Constant(true),
-                    ) => {}
-
-                    (OperandType::False, OperandType::True, Boolean::Constant(true)) => {}
-                    (OperandType::False, OperandType::False, Boolean::Constant(false)) => {}
-                    (OperandType::False, OperandType::AllocatedTrue, Boolean::Is(_)) => {}
-                    (OperandType::False, OperandType::AllocatedFalse, Boolean::Is(_)) => {}
-                    (OperandType::False, OperandType::NegatedAllocatedTrue, Boolean::Not(_)) => {}
-                    (OperandType::False, OperandType::NegatedAllocatedFalse, Boolean::Not(_)) => {}
-
-                    (OperandType::AllocatedTrue, OperandType::True, Boolean::Constant(true)) => {}
-                    (OperandType::AllocatedTrue, OperandType::False, Boolean::Is(_)) => {}
-                    (
-                        OperandType::AllocatedTrue,
-                        OperandType::AllocatedTrue,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert_eq!(v.value, Some(true));
+                    (OpType::AllocatedFalse, OpType::True, Boolean::Constant(true)) => (),
+                    (OpType::AllocatedFalse, OpType::False, Boolean::Is(_)) => (),
+                    (OpType::AllocatedFalse, OpType::AllocatedTrue, Boolean::Is(ref v)) => {
+                        assert_eq!(v.value(), Ok(true));
+                    }
+                    (OpType::AllocatedFalse, OpType::AllocatedFalse, Boolean::Is(ref v)) => {
+                        assert_eq!(v.value(), Ok(false));
+                    }
+                    (OpType::AllocatedFalse, OpType::NegatedAllocatedTrue, Boolean::Not(ref v)) => {
+                        assert_eq!(v.value(), Ok(true));
                     }
                     (
-                        OperandType::AllocatedTrue,
-                        OperandType::AllocatedFalse,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert_eq!(v.value, Some(true));
-                    }
-                    (
-                        OperandType::AllocatedTrue,
-                        OperandType::NegatedAllocatedTrue,
+                        OpType::AllocatedFalse,
+                        OpType::NegatedAllocatedFalse,
                         Boolean::Not(ref v),
                     ) => {
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::AllocatedTrue,
-                        OperandType::NegatedAllocatedFalse,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert_eq!(v.value, Some(false));
+                        assert_eq!(v.value(), Ok(false));
                     }
 
-                    (OperandType::AllocatedFalse, OperandType::True, Boolean::Constant(true)) => {}
-                    (OperandType::AllocatedFalse, OperandType::False, Boolean::Is(_)) => {}
-                    (
-                        OperandType::AllocatedFalse,
-                        OperandType::AllocatedTrue,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert_eq!(v.value, Some(true));
+                    (OpType::NegatedAllocatedTrue, OpType::True, Boolean::Constant(true)) => (),
+                    (OpType::NegatedAllocatedTrue, OpType::False, Boolean::Not(_)) => (),
+                    (OpType::NegatedAllocatedTrue, OpType::AllocatedTrue, Boolean::Not(ref v)) => {
+                        assert_eq!(v.value(), Ok(false));
+                    }
+                    (OpType::NegatedAllocatedTrue, OpType::AllocatedFalse, Boolean::Not(ref v)) => {
+                        assert_eq!(v.value(), Ok(true));
                     }
                     (
-                        OperandType::AllocatedFalse,
-                        OperandType::AllocatedFalse,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::AllocatedFalse,
-                        OperandType::NegatedAllocatedTrue,
+                        OpType::NegatedAllocatedTrue,
+                        OpType::NegatedAllocatedTrue,
                         Boolean::Not(ref v),
                     ) => {
-                        assert_eq!(v.value, Some(true));
+                        assert_eq!(v.value(), Ok(true));
                     }
                     (
-                        OperandType::AllocatedFalse,
-                        OperandType::NegatedAllocatedFalse,
+                        OpType::NegatedAllocatedTrue,
+                        OpType::NegatedAllocatedFalse,
                         Boolean::Not(ref v),
                     ) => {
-                        assert_eq!(v.value, Some(false));
+                        assert_eq!(v.value(), Ok(false));
                     }
 
-                    (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::True,
-                        Boolean::Constant(true),
-                    ) => {}
-                    (OperandType::NegatedAllocatedTrue, OperandType::False, Boolean::Not(_)) => {}
-                    (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::AllocatedTrue,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert_eq!(v.value, Some(false));
+                    (OpType::NegatedAllocatedFalse, OpType::True, Boolean::Constant(true)) => (),
+                    (OpType::NegatedAllocatedFalse, OpType::False, Boolean::Not(_)) => (),
+                    (OpType::NegatedAllocatedFalse, OpType::AllocatedTrue, Boolean::Not(ref v)) => {
+                        assert_eq!(v.value(), Ok(false));
                     }
                     (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::AllocatedFalse,
+                        OpType::NegatedAllocatedFalse,
+                        OpType::AllocatedFalse,
                         Boolean::Not(ref v),
                     ) => {
-                        assert_eq!(v.value, Some(true));
+                        assert_eq!(v.value(), Ok(false));
                     }
                     (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::NegatedAllocatedTrue,
+                        OpType::NegatedAllocatedFalse,
+                        OpType::NegatedAllocatedTrue,
                         Boolean::Not(ref v),
                     ) => {
-                        assert_eq!(v.value, Some(true));
+                        assert_eq!(v.value(), Ok(false));
                     }
                     (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::NegatedAllocatedFalse,
+                        OpType::NegatedAllocatedFalse,
+                        OpType::NegatedAllocatedFalse,
                         Boolean::Not(ref v),
                     ) => {
-                        assert_eq!(v.value, Some(false));
-                    }
-
-                    (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::True,
-                        Boolean::Constant(true),
-                    ) => {}
-                    (OperandType::NegatedAllocatedFalse, OperandType::False, Boolean::Not(_)) => {}
-                    (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::AllocatedTrue,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::AllocatedFalse,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::NegatedAllocatedTrue,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::NegatedAllocatedFalse,
-                        Boolean::Not(ref v),
-                    ) => {
-                        assert_eq!(v.value, Some(false));
+                        assert_eq!(v.value(), Ok(false));
                     }
 
                     _ => panic!(
@@ -1450,227 +1176,126 @@ mod test {
                 }
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_boolean_and() {
-        let variants = [
-            OperandType::True,
-            OperandType::False,
-            OperandType::AllocatedTrue,
-            OperandType::AllocatedFalse,
-            OperandType::NegatedAllocatedTrue,
-            OperandType::NegatedAllocatedFalse,
-        ];
+    fn test_boolean_and() -> Result<(), SynthesisError> {
+        for first_operand in VARIANTS.iter().cloned() {
+            for second_operand in VARIANTS.iter().cloned() {
+                let cs = ConstraintSystem::<Fr>::new_ref();
 
-        for first_operand in variants.iter().cloned() {
-            for second_operand in variants.iter().cloned() {
-                let mut cs = TestConstraintSystem::<Fr>::new();
+                let a = construct(cs.clone(), first_operand, "a")?;
+                let b = construct(cs.clone(), second_operand, "b")?;
+                let c = a.and(&b)?;
 
-                let a;
-                let b;
-
-                {
-                    let mut dyn_construct = |operand, name| {
-                        let cs = cs.ns(|| name);
-
-                        match operand {
-                            OperandType::True => Boolean::constant(true),
-                            OperandType::False => Boolean::constant(false),
-                            OperandType::AllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(cs, || Ok(true)).unwrap())
-                            }
-                            OperandType::AllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(cs, || Ok(false)).unwrap())
-                            }
-                            OperandType::NegatedAllocatedTrue => {
-                                Boolean::from(AllocatedBit::alloc(cs, || Ok(true)).unwrap()).not()
-                            }
-                            OperandType::NegatedAllocatedFalse => {
-                                Boolean::from(AllocatedBit::alloc(cs, || Ok(false)).unwrap()).not()
-                            }
-                        }
-                    };
-
-                    a = dyn_construct(first_operand, "a");
-                    b = dyn_construct(second_operand, "b");
-                }
-
-                let c = Boolean::and(&mut cs, &a, &b).unwrap();
-
-                assert!(cs.is_satisfied());
+                assert!(cs.is_satisfied().unwrap());
 
                 match (first_operand, second_operand, c) {
-                    (OperandType::True, OperandType::True, Boolean::Constant(true)) => {}
-                    (OperandType::True, OperandType::False, Boolean::Constant(false)) => {}
-                    (OperandType::True, OperandType::AllocatedTrue, Boolean::Is(_)) => {}
-                    (OperandType::True, OperandType::AllocatedFalse, Boolean::Is(_)) => {}
-                    (OperandType::True, OperandType::NegatedAllocatedTrue, Boolean::Not(_)) => {}
-                    (OperandType::True, OperandType::NegatedAllocatedFalse, Boolean::Not(_)) => {}
+                    (OpType::True, OpType::True, Boolean::Constant(true)) => (),
+                    (OpType::True, OpType::False, Boolean::Constant(false)) => (),
+                    (OpType::True, OpType::AllocatedTrue, Boolean::Is(_)) => (),
+                    (OpType::True, OpType::AllocatedFalse, Boolean::Is(_)) => (),
+                    (OpType::True, OpType::NegatedAllocatedTrue, Boolean::Not(_)) => (),
+                    (OpType::True, OpType::NegatedAllocatedFalse, Boolean::Not(_)) => (),
 
-                    (OperandType::False, OperandType::True, Boolean::Constant(false)) => {}
-                    (OperandType::False, OperandType::False, Boolean::Constant(false)) => {}
-                    (OperandType::False, OperandType::AllocatedTrue, Boolean::Constant(false)) => {}
-                    (OperandType::False, OperandType::AllocatedFalse, Boolean::Constant(false)) => {
-                    }
-                    (
-                        OperandType::False,
-                        OperandType::NegatedAllocatedTrue,
-                        Boolean::Constant(false),
-                    ) => {}
-                    (
-                        OperandType::False,
-                        OperandType::NegatedAllocatedFalse,
-                        Boolean::Constant(false),
-                    ) => {}
+                    (OpType::False, OpType::True, Boolean::Constant(false)) => (),
+                    (OpType::False, OpType::False, Boolean::Constant(false)) => (),
+                    (OpType::False, OpType::AllocatedTrue, Boolean::Constant(false)) => (),
+                    (OpType::False, OpType::AllocatedFalse, Boolean::Constant(false)) => (),
+                    (OpType::False, OpType::NegatedAllocatedTrue, Boolean::Constant(false)) => (),
+                    (OpType::False, OpType::NegatedAllocatedFalse, Boolean::Constant(false)) => (),
 
-                    (OperandType::AllocatedTrue, OperandType::True, Boolean::Is(_)) => {}
-                    (OperandType::AllocatedTrue, OperandType::False, Boolean::Constant(false)) => {}
-                    (
-                        OperandType::AllocatedTrue,
-                        OperandType::AllocatedTrue,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("and result") == Fr::one());
-                        assert_eq!(v.value, Some(true));
+                    (OpType::AllocatedTrue, OpType::True, Boolean::Is(_)) => (),
+                    (OpType::AllocatedTrue, OpType::False, Boolean::Constant(false)) => (),
+                    (OpType::AllocatedTrue, OpType::AllocatedTrue, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::one());
+                        assert_eq!(v.value(), Ok(true));
                     }
-                    (
-                        OperandType::AllocatedTrue,
-                        OperandType::AllocatedFalse,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("and result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
+                    (OpType::AllocatedTrue, OpType::AllocatedFalse, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
                     }
-                    (
-                        OperandType::AllocatedTrue,
-                        OperandType::NegatedAllocatedTrue,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("and not result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
+                    (OpType::AllocatedTrue, OpType::NegatedAllocatedTrue, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
                     }
-                    (
-                        OperandType::AllocatedTrue,
-                        OperandType::NegatedAllocatedFalse,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("and not result") == Fr::one());
-                        assert_eq!(v.value, Some(true));
+                    (OpType::AllocatedTrue, OpType::NegatedAllocatedFalse, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::one());
+                        assert_eq!(v.value(), Ok(true));
                     }
 
-                    (OperandType::AllocatedFalse, OperandType::True, Boolean::Is(_)) => {}
-                    (OperandType::AllocatedFalse, OperandType::False, Boolean::Constant(false)) => {
+                    (OpType::AllocatedFalse, OpType::True, Boolean::Is(_)) => (),
+                    (OpType::AllocatedFalse, OpType::False, Boolean::Constant(false)) => (),
+                    (OpType::AllocatedFalse, OpType::AllocatedTrue, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
                     }
-                    (
-                        OperandType::AllocatedFalse,
-                        OperandType::AllocatedTrue,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("and result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
+                    (OpType::AllocatedFalse, OpType::AllocatedFalse, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
                     }
-                    (
-                        OperandType::AllocatedFalse,
-                        OperandType::AllocatedFalse,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("and result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
+                    (OpType::AllocatedFalse, OpType::NegatedAllocatedTrue, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
                     }
-                    (
-                        OperandType::AllocatedFalse,
-                        OperandType::NegatedAllocatedTrue,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("and not result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::AllocatedFalse,
-                        OperandType::NegatedAllocatedFalse,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("and not result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
+                    (OpType::AllocatedFalse, OpType::NegatedAllocatedFalse, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
                     }
 
-                    (OperandType::NegatedAllocatedTrue, OperandType::True, Boolean::Not(_)) => {}
-                    (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::False,
-                        Boolean::Constant(false),
-                    ) => {}
-                    (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::AllocatedTrue,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("and not result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
+                    (OpType::NegatedAllocatedTrue, OpType::True, Boolean::Not(_)) => (),
+                    (OpType::NegatedAllocatedTrue, OpType::False, Boolean::Constant(false)) => (),
+                    (OpType::NegatedAllocatedTrue, OpType::AllocatedTrue, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
+                    }
+                    (OpType::NegatedAllocatedTrue, OpType::AllocatedFalse, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
                     }
                     (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::AllocatedFalse,
+                        OpType::NegatedAllocatedTrue,
+                        OpType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and not result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
                     }
                     (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::NegatedAllocatedTrue,
+                        OpType::NegatedAllocatedTrue,
+                        OpType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("nor result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::NegatedAllocatedTrue,
-                        OperandType::NegatedAllocatedFalse,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("nor result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
                     }
 
-                    (OperandType::NegatedAllocatedFalse, OperandType::True, Boolean::Not(_)) => {}
-                    (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::False,
-                        Boolean::Constant(false),
-                    ) => {}
-                    (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::AllocatedTrue,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("and not result") == Fr::one());
-                        assert_eq!(v.value, Some(true));
+                    (OpType::NegatedAllocatedFalse, OpType::True, Boolean::Not(_)) => (),
+                    (OpType::NegatedAllocatedFalse, OpType::False, Boolean::Constant(false)) => (),
+                    (OpType::NegatedAllocatedFalse, OpType::AllocatedTrue, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::one());
+                        assert_eq!(v.value(), Ok(true));
+                    }
+                    (OpType::NegatedAllocatedFalse, OpType::AllocatedFalse, Boolean::Is(ref v)) => {
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
                     }
                     (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::AllocatedFalse,
+                        OpType::NegatedAllocatedFalse,
+                        OpType::NegatedAllocatedTrue,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("and not result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::zero());
+                        assert_eq!(v.value(), Ok(false));
                     }
                     (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::NegatedAllocatedTrue,
+                        OpType::NegatedAllocatedFalse,
+                        OpType::NegatedAllocatedFalse,
                         Boolean::Is(ref v),
                     ) => {
-                        assert!(cs.get("nor result") == Fr::zero());
-                        assert_eq!(v.value, Some(false));
-                    }
-                    (
-                        OperandType::NegatedAllocatedFalse,
-                        OperandType::NegatedAllocatedFalse,
-                        Boolean::Is(ref v),
-                    ) => {
-                        assert!(cs.get("nor result") == Fr::one());
-                        assert_eq!(v.value, Some(true));
+                        assert_eq!(cs.assigned_value(v.variable()).unwrap(), Fr::one());
+                        assert_eq!(v.value(), Ok(true));
                     }
 
                     _ => {
@@ -1682,51 +1307,53 @@ mod test {
                 }
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_enforce_in_field() {
+    fn test_enforce_in_field() -> Result<(), SynthesisError> {
         {
-            let mut cs = TestConstraintSystem::<Fr>::new();
+            let cs = ConstraintSystem::<Fr>::new_ref();
 
             let mut bits = vec![];
-            for (i, b) in BitIterator::new(Fr::characteristic()).skip(1).enumerate() {
-                bits.push(Boolean::from(
-                    AllocatedBit::alloc(cs.ns(|| format!("bit_gadget {}", i)), || Ok(b)).unwrap(),
-                ));
+            for b in BitIterator::new(Fr::characteristic()).skip(1) {
+                bits.push(Boolean::new_witness(cs.clone(), || Ok(b))?);
             }
 
-            Boolean::enforce_in_field::<_, _, Fr>(&mut cs, &bits).unwrap();
+            Boolean::enforce_in_field(&bits)?;
 
-            assert!(!cs.is_satisfied());
+            assert!(!cs.is_satisfied().unwrap());
         }
 
         let mut rng = XorShiftRng::seed_from_u64(1231275789u64);
 
         for _ in 0..1000 {
             let r = Fr::rand(&mut rng);
-            let mut cs = TestConstraintSystem::<Fr>::new();
+            let cs = ConstraintSystem::<Fr>::new_ref();
 
             let mut bits = vec![];
-            for (i, b) in BitIterator::new(r.into_repr()).skip(1).enumerate() {
-                bits.push(Boolean::from(
-                    AllocatedBit::alloc(cs.ns(|| format!("bit_gadget {}", i)), || Ok(b)).unwrap(),
-                ));
+            for b in BitIterator::new(r.into_repr()).skip(1) {
+                bits.push(Boolean::new_witness(cs.clone(), || Ok(b))?);
             }
 
-            Boolean::enforce_in_field::<_, _, Fr>(&mut cs, &bits).unwrap();
+            Boolean::enforce_in_field(&bits)?;
 
-            assert!(cs.is_satisfied());
+            assert!(cs.is_satisfied().unwrap());
         }
+        Ok(())
     }
 
     #[test]
-    fn test_enforce_nand() {
+    fn test_enforce_nand() -> Result<(), SynthesisError> {
         {
-            let mut cs = TestConstraintSystem::<Fr>::new();
+            let cs = ConstraintSystem::<Fr>::new_ref();
 
-            assert!(Boolean::enforce_kary_nand(&[Boolean::constant(false)]).is_ok());
-            assert!(Boolean::enforce_kary_nand(&[Boolean::constant(true)]).is_err());
+            assert!(
+                Boolean::enforce_kary_nand(&[Boolean::new_constant(cs.clone(), false)?]).is_ok()
+            );
+            assert!(
+                Boolean::enforce_kary_nand(&[Boolean::new_constant(cs.clone(), true)?]).is_err()
+            );
         }
 
         for i in 1..5 {
@@ -1734,33 +1361,20 @@ mod test {
             for mut b in 0..(1 << i) {
                 // with every possible negation
                 for mut n in 0..(1 << i) {
-                    let mut cs = TestConstraintSystem::<Fr>::new();
+                    let cs = ConstraintSystem::<Fr>::new_ref();
 
                     let mut expected = true;
 
                     let mut bits = vec![];
-                    for j in 0..i {
+                    for _ in 0..i {
                         expected &= b & 1 == 1;
 
-                        if n & 1 == 1 {
-                            bits.push(Boolean::from(
-                                AllocatedBit::alloc(cs.ns(|| format!("bit_gadget {}", j)), || {
-                                    Ok(b & 1 == 1)
-                                })
-                                .unwrap(),
-                            ));
+                        let bit = if n & 1 == 1 {
+                            Boolean::new_witness(cs.clone(), || Ok(b & 1 == 1))?
                         } else {
-                            bits.push(
-                                Boolean::from(
-                                    AllocatedBit::alloc(
-                                        cs.ns(|| format!("bit_gadget {}", j)),
-                                        || Ok(b & 1 == 0),
-                                    )
-                                    .unwrap(),
-                                )
-                                .not(),
-                            );
-                        }
+                            Boolean::new_witness(cs.clone(), || Ok(b & 1 == 0))?.not()
+                        };
+                        bits.push(bit);
 
                         b >>= 1;
                         n >>= 1;
@@ -1768,52 +1382,45 @@ mod test {
 
                     let expected = !expected;
 
-                    Boolean::enforce_nand(&mut cs, &bits).unwrap();
+                    Boolean::enforce_kary_nand(&bits)?;
 
                     if expected {
-                        assert!(cs.is_satisfied());
+                        assert!(cs.is_satisfied().unwrap());
                     } else {
-                        assert!(!cs.is_satisfied());
+                        assert!(!cs.is_satisfied().unwrap());
                     }
                 }
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_kary_and() {
+    fn test_kary_and() -> Result<(), SynthesisError> {
         // test different numbers of operands
         for i in 1..15 {
             // with every possible assignment for them
             for mut b in 0..(1 << i) {
-                let mut cs = TestConstraintSystem::<Fr>::new();
+                let cs = ConstraintSystem::<Fr>::new_ref();
 
                 let mut expected = true;
 
                 let mut bits = vec![];
-                for j in 0..i {
+                for _ in 0..i {
                     expected &= b & 1 == 1;
-
-                    bits.push(Boolean::from(
-                        AllocatedBit::alloc(cs.ns(|| format!("bit_gadget {}", j)), || {
-                            Ok(b & 1 == 1)
-                        })
-                        .unwrap(),
-                    ));
+                    bits.push(Boolean::new_witness(cs.clone(), || Ok(b & 1 == 1))?);
                     b >>= 1;
                 }
 
-                let r = Boolean::kary_and(&mut cs, &bits).unwrap();
+                let r = Boolean::kary_and(&bits)?;
 
-                assert!(cs.is_satisfied());
+                assert!(cs.is_satisfied().unwrap());
 
-                match r {
-                    Boolean::Is(ref r) => {
-                        assert_eq!(r.value.unwrap(), expected);
-                    }
-                    _ => unreachable!(),
+                if let Boolean::Is(ref r) = r {
+                    assert_eq!(r.value()?, expected);
                 }
             }
         }
+        Ok(())
     }
 }

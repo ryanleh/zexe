@@ -23,6 +23,24 @@ pub enum SynthesisError {
     UnconstrainedVariable,
 }
 
+impl PartialEq for SynthesisError {
+    fn eq(&self, other: &SynthesisError) -> bool {
+        use SynthesisError::*;
+        match (self, other) {
+            (AssignmentMissing, AssignmentMissing)
+            | (DivisionByZero, DivisionByZero)
+            | (Unsatisfiable, Unsatisfiable)
+            | (PolynomialDegreeTooLarge, PolynomialDegreeTooLarge)
+            | (UnexpectedIdentity, UnexpectedIdentity)
+            | (MalformedVerifyingKey, MalformedVerifyingKey)
+            | (UnconstrainedVariable, UnconstrainedVariable) => true,
+            (_, _) => false,
+        }
+    }
+}
+
+impl Eq for SynthesisError {}
+
 impl From<io::Error> for SynthesisError {
     fn from(e: io::Error) -> SynthesisError {
         SynthesisError::IoError(e)

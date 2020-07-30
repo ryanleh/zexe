@@ -232,13 +232,12 @@ where
 }
 
 impl_bounded_ops!(
-    AllocatedQuadExt<AF, P>, 
-    QuadExtField<P>, 
-    Add, 
-    add, 
-    AddAssign, 
-    add_assign, 
-    add_constant, 
+    AllocatedQuadExt<AF, P>,
+    QuadExtField<P>,
+    Add,
+    add,
+    AddAssign,
+    add_assign,
     |this: &'a AllocatedQuadExt<AF, P>, other: &'a AllocatedQuadExt<AF, P>| {
         let c0 = &this.c0 + &other.c0;
         let c1 = &this.c1 + &other.c1;
@@ -258,13 +257,12 @@ impl_bounded_ops!(
     for<'b> &'b AF: core::ops::Mul<P::BaseField, Output = AF>,
 );
 impl_bounded_ops!(
-    AllocatedQuadExt<AF, P>, 
-    QuadExtField<P>, 
+    AllocatedQuadExt<AF, P>,
+    QuadExtField<P>,
     Sub,
-    sub, 
-    SubAssign, 
-    sub_assign, 
-    sub_constant, 
+    sub,
+    SubAssign,
+    sub_assign,
     |this: &'a AllocatedQuadExt<AF, P>, other: &'a AllocatedQuadExt<AF, P>| {
         let c0 = &this.c0 - &other.c0;
         let c1 = &this.c1 - &other.c1;
@@ -284,13 +282,12 @@ impl_bounded_ops!(
     for<'b> &'b AF: core::ops::Mul<P::BaseField, Output = AF>,
 );
 impl_bounded_ops!(
-    AllocatedQuadExt<AF, P>, 
-    QuadExtField<P>, 
+    AllocatedQuadExt<AF, P>,
+    QuadExtField<P>,
     Mul,
-    mul, 
-    MulAssign, 
-    mul_assign, 
-    mul_constant, 
+    mul,
+    MulAssign,
+    mul_assign,
     |this: &'a AllocatedQuadExt<AF, P>, other: &'a AllocatedQuadExt<AF, P>| {
         // Karatsuba multiplication for Fp2:
         //     v0 = A.c0 * B.c0

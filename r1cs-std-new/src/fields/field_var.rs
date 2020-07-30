@@ -2,7 +2,6 @@ use crate::prelude::*;
 use crate::{fields::AllocatedField, Assignment, R1CSVar};
 use algebra::{prelude::*, to_bytes, BitIterator, ToBytes};
 use core::borrow::Borrow;
-use core::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
 use r1cs_core::{ConstraintSystemRef, SynthesisError};
 
 /// Represent variables corresponding to the field `F`.
@@ -22,6 +21,21 @@ where
         match self {
             Self::Constant(_) => None,
             Self::Var(a) => a.cs(),
+        }
+    }
+}
+
+impl<F, V> From<Boolean<V::ConstraintF>> for FieldVar<F, V>
+where
+    F: Field,
+    V: AllocatedField<F>,
+{
+    fn from(other: Boolean<V::ConstraintF>) -> Self {
+        use crate::boolean::bool_to_field;
+        if let Boolean::Constant(b) = other {
+            Self::Constant(bool_to_field(b))
+        } else {
+            Self::Var(V::from(other))
         }
     }
 }
@@ -195,162 +209,71 @@ where
 /****************************************************************************/
 /****************************************************************************/
 
-impl<'a, F, V> Add<&'a FieldVar<F, V>> for &'a FieldVar<F, V>
-where
-    F: Field,
-    V: AllocatedField<F>,
-{
-    type Output = FieldVar<F, V>;
-
-    fn add(self, other: Self) -> FieldVar<F, V> {
+impl_ops!(
+    FieldVar<F, V>,
+    F,
+    Add,
+    add,
+    AddAssign,
+    add_assign,
+    |this: &'a FieldVar<F, V>, other: &'a FieldVar<F, V>| {
         use FieldVar::*;
-        match (self, other) {
+        match (this, other) {
             (Constant(c1), Constant(c2)) => Constant(*c1 + *c2),
             (Constant(c), Var(v)) | (Var(v), Constant(c)) => Var(v.add_constant(*c).unwrap()),
             (Var(v1), Var(v2)) => Var(v1.add(v2).unwrap()),
         }
-    }
-}
+    },
+    |this: &'a FieldVar<F, V>, other: F| {
+        this + &FieldVar::Constant(other)
+    },
+    V: AllocatedField<F>, F: Field
+);
 
-impl<'a, F, V> Sub<&'a FieldVar<F, V>> for &'a FieldVar<F, V>
-where
-    F: Field,
-    V: AllocatedField<F>,
-{
-    type Output = FieldVar<F, V>;
-
-    fn sub(self, other: Self) -> FieldVar<F, V> {
+impl_ops!(
+    FieldVar<F, V>,
+    F,
+    Sub,
+    sub,
+    SubAssign,
+    sub_assign,
+    |this: &'a FieldVar<F, V>, other: &'a FieldVar<F, V>| {
         use FieldVar::*;
-        match (self, other) {
+        match (this, other) {
             (Constant(c1), Constant(c2)) => Constant(*c1 - *c2),
-            (Constant(c), Var(v)) => Var(v.sub_constant(*c).unwrap().negate().unwrap()),
-            (Var(v), Constant(c)) => Var(v.sub_constant(*c).unwrap()),
+            (Constant(c), Var(v)) | (Var(v), Constant(c)) => Var(v.sub_constant(*c).unwrap()),
             (Var(v1), Var(v2)) => Var(v1.sub(v2).unwrap()),
         }
-    }
-}
+    },
+    |this: &'a FieldVar<F, V>, other: F| {
+        this - &FieldVar::Constant(other)
+    },
+    V: AllocatedField<F>, F: Field
+);
 
-impl<'a, F, V> Mul<&'a FieldVar<F, V>> for &'a FieldVar<F, V>
-where
-    F: Field,
-    V: AllocatedField<F>,
-{
-    type Output = FieldVar<F, V>;
-
-    fn mul(self, other: Self) -> FieldVar<F, V> {
+impl_ops!(
+    FieldVar<F, V>,
+    F,
+    Mul,
+    mul,
+    MulAssign,
+    mul_assign,
+    |this: &'a FieldVar<F, V>, other: &'a FieldVar<F, V>| {
         use FieldVar::*;
-        match (self, other) {
+        match (this, other) {
             (Constant(c1), Constant(c2)) => Constant(*c1 * *c2),
             (Constant(c), Var(v)) | (Var(v), Constant(c)) => Var(v.mul_constant(*c).unwrap()),
             (Var(v1), Var(v2)) => Var(v1.mul(v2).unwrap()),
         }
-    }
-}
-
-impl<'a, F, V> AddAssign<&'a FieldVar<F, V>> for FieldVar<F, V>
-where
-    F: Field,
-    V: AllocatedField<F>,
-{
-    fn add_assign(&mut self, other: &'a Self) {
-        let result = &*self + other;
-        *self = result
-    }
-}
-
-impl<'a, F, V> SubAssign<&'a FieldVar<F, V>> for FieldVar<F, V>
-where
-    F: Field,
-    V: AllocatedField<F>,
-{
-    fn sub_assign(&mut self, other: &'a Self) {
-        let result = &*self - other;
-        *self = result
-    }
-}
-
-impl<'a, F, V> MulAssign<&'a FieldVar<F, V>> for FieldVar<F, V>
-where
-    F: Field,
-    V: AllocatedField<F>,
-{
-    fn mul_assign(&mut self, other: &'a Self) {
-        let result = &*self * other;
-        *self = result
-    }
-}
+    },
+    |this: &'a FieldVar<F, V>, other: F| {
+        this - &FieldVar::Constant(other)
+    },
+    V: AllocatedField<F>, F: Field
+);
 
 /****************************************************************************/
 /****************************************************************************/
-
-impl<'a, F, V> Add<F> for &'a FieldVar<F, V>
-where
-    F: Field,
-    V: AllocatedField<F>,
-{
-    type Output = FieldVar<F, V>;
-
-    fn add(self, other: F) -> FieldVar<F, V> {
-        self + &FieldVar::Constant(other)
-    }
-}
-
-impl<'a, F, V> Sub<F> for &'a FieldVar<F, V>
-where
-    F: Field,
-    V: AllocatedField<F>,
-{
-    type Output = FieldVar<F, V>;
-
-    fn sub(self, other: F) -> FieldVar<F, V> {
-        self - &FieldVar::Constant(other)
-    }
-}
-
-impl<'a, F, V> Mul<F> for &'a FieldVar<F, V>
-where
-    F: Field,
-    V: AllocatedField<F>,
-{
-    type Output = FieldVar<F, V>;
-
-    fn mul(self, other: F) -> FieldVar<F, V> {
-        self * &FieldVar::Constant(other)
-    }
-}
-
-impl<'a, F, V> AddAssign<F> for FieldVar<F, V>
-where
-    F: Field,
-    V: AllocatedField<F>,
-{
-    fn add_assign(&mut self, other: F) {
-        let result = &*self + other;
-        *self = result
-    }
-}
-
-impl<'a, F, V> SubAssign<F> for FieldVar<F, V>
-where
-    F: Field,
-    V: AllocatedField<F>,
-{
-    fn sub_assign(&mut self, other: F) {
-        let result = &*self - other;
-        *self = result
-    }
-}
-
-impl<'a, F, V> MulAssign<F> for FieldVar<F, V>
-where
-    F: Field,
-    V: AllocatedField<F>,
-{
-    fn mul_assign(&mut self, other: F) {
-        let result = &*self * other;
-        *self = result
-    }
-}
 
 impl<F, V, ConstraintF> EqGadget<ConstraintF> for FieldVar<F, V>
 where

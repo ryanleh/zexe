@@ -35,9 +35,6 @@ use std::vec::Vec;
 
 use algebra::prelude::Field;
 
-// pub mod test_constraint_counter;
-// pub mod test_constraint_system;
-
 pub mod bits;
 pub use self::bits::*;
 

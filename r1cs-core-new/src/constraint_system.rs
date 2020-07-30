@@ -102,8 +102,15 @@ impl<F: Field> ConstraintSystem<F> {
             current_namespace_path: String::new(),
             lc_map: BTreeMap::new(),
 
-            mode: Mode::Setup,
+            mode: Mode::Prove {
+                construct_matrices: true,
+            },
         }
+    }
+
+    /// Create a new `ConstraintSystemRef<F>`.
+    pub fn new_ref() -> ConstraintSystemRef<F> {
+        ConstraintSystemRef::new(Self::new())
     }
 
     /// Check whether `self.mode == Mode::Setup`.
@@ -273,7 +280,6 @@ impl<F: Field> ConstraintSystem<F> {
 
     /// This step must be called after constraint generation has completed, and after
     /// all symbolic LCs have been inlined into the places that they are used.
-    #[inline]
     pub fn to_matrices(&self) -> Option<ConstraintMatrices<F>> {
         if let Mode::Prove {
             construct_matrices: false,
@@ -314,6 +320,52 @@ impl<F: Field> ConstraintSystem<F> {
             Some(matrices)
         } else {
             None
+        }
+    }
+
+    fn eval_lc(&self, lc: LcIndex) -> Option<F> {
+        let lc = self.lc_map.get(&lc)?;
+        let mut acc = F::zero();
+        for (coeff, var) in lc.iter() {
+            acc += *coeff * &self.assigned_value(*var)?;
+        }
+        Some(acc)
+    }
+
+    /// Outputs whether or not `self` is satisfied.
+    pub fn is_satisfied(&self) -> Option<bool> {
+        if self.is_in_setup_mode() {
+            None
+        } else {
+            Some(self.which_is_unsatisfied().is_none())
+        }
+    }
+
+    /// Outputs the name of the first unsatisfied constraint (if any)
+    pub fn which_is_unsatisfied(&self) -> Option<String> {
+        if self.is_in_setup_mode() {
+            None
+        } else {
+            for i in 0..self.num_constraints {
+                let a = self.eval_lc(self.a_constraints[i])?;
+                let b = self.eval_lc(self.b_constraints[i])?;
+                let c = self.eval_lc(self.c_constraints[i])?;
+                if a * b != c {
+                    return Some(self.constraint_names[i].clone());
+                }
+            }
+            None
+        }
+    }
+
+    /// Obtain the assignment corresponding to the `Variable` `v`.
+    pub fn assigned_value(&self, v: Variable) -> Option<F> {
+        match v {
+            Variable::One => Some(F::one()),
+            Variable::Zero => Some(F::zero()),
+            Variable::Witness(idx) => self.witness_assignment.get(idx).copied(),
+            Variable::Instance(idx) => self.instance_assignment.get(idx).copied(),
+            Variable::SymbolicLc(idx) => self.eval_lc(idx),
         }
     }
 }
@@ -483,6 +535,21 @@ impl<F: Field> ConstraintSystemRef<F> {
     #[inline]
     pub fn to_matrices(&self) -> Option<ConstraintMatrices<F>> {
         self.inner().borrow().to_matrices()
+    }
+
+    /// Outputs whether or not `self` is satisfied.
+    pub fn is_satisfied(&self) -> Option<bool> {
+        self.inner().borrow().is_satisfied()
+    }
+
+    /// Outputs the name of the first unsatisfied constraint (if any)
+    pub fn which_is_unsatisfied(&self) -> Option<String> {
+        self.inner().borrow().which_is_unsatisfied()
+    }
+
+    /// Obtain the assignment corresponding to the `Variable` `v`.
+    pub fn assigned_value(&self, v: Variable) -> Option<F> {
+        self.inner().borrow().assigned_value(v)
     }
 }
 

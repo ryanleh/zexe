@@ -226,7 +226,6 @@ impl_bounded_ops!(
     add,
     AddAssign,
     add_assign,
-    add_constant,
     |this: &'a AllocatedCubicExt<AF, P>, other: &'a AllocatedCubicExt<AF, P>| {
         let c0 = &this.c0 + &other.c0;
         let c1 = &this.c1 + &other.c1;
@@ -250,7 +249,6 @@ impl_bounded_ops!(
     sub,
     SubAssign,
     sub_assign,
-    sub_constant,
     |this: &'a AllocatedCubicExt<AF, P>, other: &'a AllocatedCubicExt<AF, P>| {
         let c0 = &this.c0 - &other.c0;
         let c1 = &this.c1 - &other.c1;
@@ -274,7 +272,6 @@ impl_bounded_ops!(
     mul,
     MulAssign,
     mul_assign,
-    mul_constant,
     |this: &'a AllocatedCubicExt<AF, P>, other: &'a AllocatedCubicExt<AF, P>| {
         // Karatsuba multiplication for cubic extensions:
         //     v0 = A.c0 * B.c0

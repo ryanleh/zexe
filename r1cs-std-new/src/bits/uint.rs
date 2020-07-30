@@ -28,6 +28,11 @@ macro_rules! make_uint {
             }
 
             impl<F: Field> $name<F> {
+                /// Return the value of self, if assigned one.
+                pub fn value(&self) -> Result<$native, SynthesisError> {
+                    self.value.get()
+                }
+
                 /// Construct a constant `$name` from a `$native`
                 pub fn constant(value: $native) -> Self {
                     let mut bits = Vec::with_capacity($size);
@@ -302,14 +307,14 @@ macro_rules! make_uint {
             #[cfg(test)]
             mod test {
                 use super::$name;
-                use crate::{bits::boolean::Boolean, Vec};
-                use algebra::{bls12_381::Fr, One, Zero};
-                use r1cs_core::{ConstraintSystem, ConstraintSystemRef};
+                use crate::{bits::boolean::Boolean, prelude::*, Vec};
+                use algebra::bls12_381::Fr;
+                use r1cs_core::{ConstraintSystem, SynthesisError};
                 use rand::{Rng, SeedableRng};
                 use rand_xorshift::XorShiftRng;
 
                 #[test]
-                fn test_from_bits() {
+                fn test_from_bits() -> Result<(), SynthesisError> {
                     let mut rng = XorShiftRng::seed_from_u64(1231275789u64);
 
                     for _ in 0..1000 {
@@ -319,10 +324,10 @@ macro_rules! make_uint {
 
                         let b = $name::from_bits_le(&v);
 
-                        for (i, bit_gadget) in b.bits.iter().enumerate() {
-                            match bit_gadget {
-                                &Boolean::Constant(bit_gadget) => {
-                                    assert!(bit_gadget == ((b.value.unwrap() >> i) & 1 == 1));
+                        for (i, bit) in b.bits.iter().enumerate() {
+                            match bit {
+                                &Boolean::Constant(bit) => {
+                                    assert_eq!(bit, ((b.value()? >> i) & 1 == 1));
                                 }
                                 _ => unreachable!(),
                             }
@@ -338,16 +343,16 @@ macro_rules! make_uint {
                             }
                         }
                     }
+                    Ok(())
                 }
 
                 #[test]
-                fn test_xor() {
+                fn test_xor() -> Result<(), SynthesisError> {
                     use Boolean::*;
                     let mut rng = XorShiftRng::seed_from_u64(1231275789u64);
 
                     for _ in 0..1000 {
-                        let cs = ConstraintSystem::<Fr>::new();
-                        let cs = ConstraintSystemRef::new(cs);
+                        let cs = ConstraintSystem::<Fr>::new_ref();
 
                         let a: $native = rng.gen();
                         let b: $native = rng.gen();
@@ -355,50 +360,44 @@ macro_rules! make_uint {
 
                         let mut expected = a ^ b ^ c;
 
-                        let a_bit = $name::new_witness(cs.clone(), Some(a)).unwrap();
+                        let a_bit = $name::new_witness(cs.clone(), || Ok(a))?;
                         let b_bit = $name::constant(b);
-                        let c_bit = $name::new_witness(cs.clone(), Some(c)).unwrap();
+                        let c_bit = $name::new_witness(cs.clone(), || Ok(c))?;
 
                         let r = a_bit.xor(&b_bit).unwrap();
                         let r = r.xor(&c_bit).unwrap();
 
-                        assert!(cs.is_satisfied());
+                        assert!(cs.is_satisfied().unwrap());
 
                         assert!(r.value == Some(expected));
 
                         for b in r.bits.iter() {
                             match b {
-                                &Is(ref b) => {
-                                    assert!(b.value().unwrap() == (expected & 1 == 1));
-                                }
-                                &Not(ref b) => {
-                                    assert!(!b.value().unwrap() == (expected & 1 == 1));
-                                }
-                                &Constant(b) => {
-                                    assert!(b == (expected & 1 == 1));
-                                }
+                                Is(b) => assert_eq!(b.value()?, (expected & 1 == 1)),
+                                Not(b) => assert_eq!(!b.value()?, (expected & 1 == 1)),
+                                Constant(b) => assert_eq!(*b, (expected & 1 == 1)),
                             }
 
                             expected >>= 1;
                         }
                     }
+                    Ok(())
                 }
 
                 #[test]
-                fn test_addmany_constants() {
+                fn test_addmany_constants() -> Result<(), SynthesisError> {
                     let mut rng = XorShiftRng::seed_from_u64(1231275789u64);
 
                     for _ in 0..1000 {
-                        let cs = ConstraintSystem::<Fr>::new();
-                        let cs = ConstraintSystemRef::new(cs);
+                        let cs = ConstraintSystem::<Fr>::new_ref();
 
                         let a: $native = rng.gen();
                         let b: $native = rng.gen();
                         let c: $native = rng.gen();
 
-                        let a_bit = $name::constant(a);
-                        let b_bit = $name::constant(b);
-                        let c_bit = $name::constant(c);
+                        let a_bit = $name::new_constant(cs.clone(), a)?;
+                        let b_bit = $name::new_constant(cs.clone(), b)?;
+                        let c_bit = $name::new_constant(cs.clone(), c)?;
 
                         let mut expected = a.wrapping_add(b).wrapping_add(c);
 
@@ -408,25 +407,23 @@ macro_rules! make_uint {
 
                         for b in r.bits.iter() {
                             match b {
-                                &Boolean::Is(_) => panic!(),
-                                &Boolean::Not(_) => panic!(),
-                                &Boolean::Constant(b) => {
-                                    assert!(b == (expected & 1 == 1));
-                                }
+                                Boolean::Is(_) => unreachable!(),
+                                Boolean::Not(_) => unreachable!(),
+                                Boolean::Constant(b) => assert_eq!(*b, (expected & 1 == 1)),
                             }
 
                             expected >>= 1;
                         }
                     }
+                    Ok(())
                 }
 
                 #[test]
-                fn test_addmany() {
+                fn test_addmany() -> Result<(), SynthesisError> {
                     let mut rng = XorShiftRng::seed_from_u64(1231275789u64);
 
                     for _ in 0..1000 {
-                        let cs = ConstraintSystem::<Fr>::new();
-                        let cs = ConstraintSystemRef::new(cs);
+                        let cs = ConstraintSystem::<Fr>::new_ref();
 
                         let a: $native = rng.gen();
                         let b: $native = rng.gen();
@@ -435,41 +432,38 @@ macro_rules! make_uint {
 
                         let mut expected = (a ^ b).wrapping_add(c).wrapping_add(d);
 
-                        let a_bit = $name::new_witness(cs.ns(|| "a_bit"), Some(a)).unwrap();
+                        let a_bit = $name::new_witness(cs.ns("a_bit"), || Ok(a))?;
                         let b_bit = $name::constant(b);
                         let c_bit = $name::constant(c);
-                        let d_bit = $name::new_witness(cs.ns(|| "d_bit"), Some(d)).unwrap();
+                        let d_bit = $name::new_witness(cs.ns("d_bit"), || Ok(d))?;
 
                         let r = a_bit.xor(&b_bit).unwrap();
                         let r = $name::addmany(&[r, c_bit, d_bit]).unwrap();
 
-                        assert!(cs.is_satisfied());
+                        assert!(cs.is_satisfied().unwrap());
 
                         assert!(r.value == Some(expected));
 
                         for b in r.bits.iter() {
                             match b {
-                                &Boolean::Is(ref b) => {
-                                    assert!(b.value().unwrap() == (expected & 1 == 1));
-                                }
-                                &Boolean::Not(ref b) => {
-                                    assert!(!b.value().unwrap() == (expected & 1 == 1));
-                                }
-                                &Boolean::Constant(_) => unreachable!(),
+                                Boolean::Is(b) => assert_eq!(b.value()?, (expected & 1 == 1)),
+                                Boolean::Not(b) => assert_eq!(!b.value()?, (expected & 1 == 1)),
+                                Boolean::Constant(_) => unreachable!(),
                             }
 
                             expected >>= 1;
                         }
                     }
+                    Ok(())
                 }
 
                 #[test]
-                fn test_rotr() {
+                fn test_rotr() -> Result<(), SynthesisError> {
                     let mut rng = XorShiftRng::seed_from_u64(1231275789u64);
 
                     let mut num = rng.gen();
 
-                    let a = $name::constant(num);
+                    let a: $name<Fr> = $name::constant(num);
 
                     for i in 0..$size {
                         let b = a.rotr(i);
@@ -479,9 +473,7 @@ macro_rules! make_uint {
                         let mut tmp = num;
                         for b in &b.bits {
                             match b {
-                                &Boolean::Constant(b) => {
-                                    assert_eq!(b, tmp & 1 == 1);
-                                }
+                                Boolean::Constant(b) => assert_eq!(*b, tmp & 1 == 1),
                                 _ => unreachable!(),
                             }
 
@@ -490,6 +482,7 @@ macro_rules! make_uint {
 
                         num = num.rotate_right(1);
                     }
+                    Ok(())
                 }
             }
         }

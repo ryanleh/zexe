@@ -114,7 +114,6 @@ impl_ops!(
     add,
     AddAssign,
     add_assign,
-    add_constant,
     |this: &'a AllocatedFp<F>, other: &'a AllocatedFp<F>| {
         let value = match (this.value, other.value) {
             (Some(val1), Some(val2)) => Some(val1 + &val2),
@@ -141,7 +140,6 @@ impl_ops!(
     sub,
     SubAssign,
     sub_assign,
-    sub_constant,
     |this: &'a AllocatedFp<F>, other: &'a AllocatedFp<F>| {
         let value = match (this.value, other.value) {
             (Some(val1), Some(val2)) => Some(val1 - &val2),
@@ -168,7 +166,6 @@ impl_ops!(
     mul,
     MulAssign,
     mul_assign,
-    mul_constant,
     |this: &'a AllocatedFp<F>, other: &'a AllocatedFp<F>| {
         let product = AllocatedFp::new_witness(this.cs.clone(), || {
             Ok(this.value.get()? * &other.value.get()?)

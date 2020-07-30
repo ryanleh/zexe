@@ -8,12 +8,11 @@ macro_rules! impl_ops {
         $fn: ident,
         $assign_trait: ident,
         $assign_fn: ident,
-        $constant_fn: ident,
         $impl: expr,
         $constant_impl: expr,
         $($args:tt)*
     ) => {
-        impl_bounded_ops!($type, $native, $trait, $fn, $assign_trait, $assign_fn, $constant_fn, $impl, $constant_impl, ($($args)+), );
+        impl_bounded_ops!($type, $native, $trait, $fn, $assign_trait, $assign_fn, $impl, $constant_impl, ($($args)+), );
     };
 }
 
@@ -25,7 +24,6 @@ macro_rules! impl_bounded_ops {
         $fn: ident,
         $assign_trait: ident,
         $assign_fn: ident,
-        $constant_fn: ident,
         $impl: expr,
         $constant_impl: expr,
         ($($params:tt)+),

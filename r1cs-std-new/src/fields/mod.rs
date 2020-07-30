@@ -145,264 +145,196 @@ pub(crate) mod tests {
     use rand::{self, SeedableRng};
     use rand_xorshift::XorShiftRng;
 
-    use crate::{prelude::*, test_constraint_system::TestConstraintSystem, Vec};
+    use crate::{
+        fields::{field_var::FieldVar, AllocatedField},
+        prelude::*,
+        Vec,
+    };
     use algebra::{test_rng, BitIterator, Field, UniformRand};
-    use r1cs_core::ConstraintSystem;
+    use r1cs_core::{ConstraintSystem, SynthesisError};
+
+    type FV<F, AF> = FieldVar<F, AF>;
 
     #[allow(dead_code)]
-    pub(crate) fn field_test<FE: Field, ConstraintF: Field, F: FieldGadget<FE, ConstraintF>>() {
-        let mut cs = TestConstraintSystem::<ConstraintF>::new();
+    pub(crate) fn field_test<F: Field, AF: AllocatedField<F>>() -> Result<(), SynthesisError>
+    where
+        AF: crate::select::TwoBitLookupGadget<
+            <AF as AllocatedField<F>>::ConstraintF,
+            TableConstant = F,
+        >,
+    {
+        let cs = ConstraintSystem::<AF::ConstraintF>::new_ref();
 
         let mut rng = test_rng();
-        let a_native = FE::rand(&mut rng);
-        let b_native = FE::rand(&mut rng);
-        let a = F::alloc(&mut cs.ns(|| "generate_a"), || Ok(a_native)).unwrap();
-        let b = F::alloc(&mut cs.ns(|| "generate_b"), || Ok(b_native)).unwrap();
-        let b_const = F::alloc_constant(&mut cs.ns(|| "generate_b_as_constant"), b_native).unwrap();
+        let a_native = F::rand(&mut rng);
+        let b_native = F::rand(&mut rng);
+        let a = FV::<F, AF>::new_witness(cs.ns("generate_a"), || Ok(a_native))?;
+        let b = FV::<F, AF>::new_witness(cs.ns("generate_b"), || Ok(b_native))?;
+        let b_const = FV::new_constant(cs.ns("b_as_constant"), b_native)?;
 
-        let zero = F::zero(cs.ns(|| "zero")).unwrap();
-        let zero_native = zero.value().unwrap();
-        zero.enforce_equal(&mut cs.ns(|| "zero_equals?"), &zero)
-            .unwrap();
-        assert_eq!(zero, zero);
+        let zero = FV::zero();
+        let zero_native = zero.value()?;
+        zero.enforce_equal(&zero)?;
 
-        let one = F::one(cs.ns(|| "one")).unwrap();
-        let one_native = one.value().unwrap();
-        assert_eq!(one, one);
-        one.enforce_equal(&mut cs.ns(|| "one_equals?"), &one)
-            .unwrap();
-        assert_ne!(one, zero);
+        let one = FV::one();
+        let one_native = one.value()?;
+        one.enforce_equal(&one)?;
 
-        let one_dup = zero.add(cs.ns(|| "zero_plus_one"), &one).unwrap();
-        one_dup
-            .enforce_equal(&mut cs.ns(|| "one_plus_zero_equals"), &one)
-            .unwrap();
-        assert_eq!(one_dup, one);
+        one.enforce_not_equal(&zero)?;
 
-        let two = one.add(cs.ns(|| "one_plus_one"), &one).unwrap();
-        two.enforce_equal(&mut cs.ns(|| "two_equals?"), &two)
-            .unwrap();
-        assert_eq!(two, two);
-        assert_ne!(zero, two);
-        assert_ne!(one, two);
+        let one_dup = &zero + &one;
+        one_dup.enforce_equal(&one)?;
 
-        // a == a
-        assert_eq!(a, a);
+        let two = &one + &one;
+        two.enforce_equal(&two)?;
+        two.enforce_equal(&one.double()?)?;
+        two.enforce_not_equal(&one)?;
+        two.enforce_not_equal(&zero)?;
 
         // a + 0 = a
-        let a_plus_zero = a.add(cs.ns(|| "a_plus_zero"), &zero).unwrap();
-        assert_eq!(a_plus_zero, a);
-        assert_eq!(a_plus_zero.value().unwrap(), a_native);
-        a_plus_zero
-            .enforce_equal(&mut cs.ns(|| "a_plus_zero_equals?"), &a)
-            .unwrap();
+        let a_plus_zero = &a + &zero;
+        assert_eq!(a_plus_zero.value()?, a_native);
+        a_plus_zero.enforce_equal(&a)?;
+        a_plus_zero.enforce_not_equal(&a.double()?)?;
 
         // a - 0 = a
-        let a_minus_zero = a.sub(cs.ns(|| "a_minus_zero"), &zero).unwrap();
-        assert_eq!(a_minus_zero, a);
-        assert_eq!(a_minus_zero.value().unwrap(), a_native);
-        a_minus_zero
-            .enforce_equal(&mut cs.ns(|| "a_minus_zero_equals?"), &a)
-            .unwrap();
+        let a_minus_zero = &a - &zero;
+        assert_eq!(a_minus_zero.value()?, a_native);
+        a_minus_zero.enforce_equal(&a)?;
 
         // a - a = 0
-        let a_minus_a = a.sub(cs.ns(|| "a_minus_a"), &a).unwrap();
-        assert_eq!(a_minus_a, zero);
-        assert_eq!(a_minus_a.value().unwrap(), zero_native);
-        a_minus_a
-            .enforce_equal(&mut cs.ns(|| "a_minus_a_equals?"), &zero)
-            .unwrap();
+        let a_minus_a = &a - &a;
+        assert_eq!(a_minus_a.value()?, zero_native);
+        a_minus_a.enforce_equal(&zero)?;
 
         // a + b = b + a
-        let a_b = a.add(cs.ns(|| "a_plus_b"), &b).unwrap();
-        let b_a = b.add(cs.ns(|| "b_plus_a"), &a).unwrap();
-        assert_eq!(a_b, b_a);
-        assert_eq!(a_b.value().unwrap(), a_native + &b_native);
-        a_b.enforce_equal(&mut cs.ns(|| "a+b == b+a"), &b_a)
-            .unwrap();
+        let a_b = &a + &b;
+        let b_a = &b + &a;
+        assert_eq!(a_b.value()?, a_native + &b_native);
+        a_b.enforce_equal(&b_a)?;
 
         // (a + b) + a = a + (b + a)
-        let ab_a = a_b.add(cs.ns(|| "a_b_plus_a"), &a).unwrap();
-        let a_ba = a.add(cs.ns(|| "a_plus_b_a"), &b_a).unwrap();
-        assert_eq!(ab_a, a_ba);
-        assert_eq!(ab_a.value().unwrap(), a_native + &b_native + &a_native);
-        ab_a.enforce_equal(&mut cs.ns(|| "a+b + a == a+ b+a"), &a_ba)
-            .unwrap();
+        let ab_a = &a_b + &a;
+        let a_ba = &a + &b_a;
+        assert_eq!(ab_a.value()?, a_native + &b_native + &a_native);
+        ab_a.enforce_equal(&a_ba)?;
 
-        let b_times_a_plus_b = a_b.mul(cs.ns(|| "b * (a + b)"), &b).unwrap();
-        let b_times_b_plus_a = b_a.mul(cs.ns(|| "b * (b + a)"), &b).unwrap();
-        assert_eq!(b_times_b_plus_a, b_times_a_plus_b);
+        let b_times_a_plus_b = &a_b * &b;
+        let b_times_b_plus_a = &b_a * &b;
         assert_eq!(
-            b_times_a_plus_b.value().unwrap(),
+            b_times_a_plus_b.value()?,
             b_native * &(b_native + &a_native)
         );
         assert_eq!(
-            b_times_a_plus_b.value().unwrap(),
+            b_times_a_plus_b.value()?,
             (b_native + &a_native) * &b_native
         );
         assert_eq!(
-            b_times_a_plus_b.value().unwrap(),
+            b_times_a_plus_b.value()?,
             (a_native + &b_native) * &b_native
         );
-        b_times_b_plus_a
-            .enforce_equal(&mut cs.ns(|| "b*(a+b) == b * (b+a)"), &b_times_a_plus_b)
-            .unwrap();
-
-        // a * 0 = 0
-        assert_eq!(a.mul(cs.ns(|| "a_times_zero"), &zero).unwrap(), zero);
+        b_times_b_plus_a.enforce_equal(&b_times_a_plus_b)?;
 
         // a * 1 = a
-        assert_eq!(a.mul(cs.ns(|| "a_times_one"), &one).unwrap(), a);
-        assert_eq!(
-            a.mul(cs.ns(|| "a_times_one2"), &one)
-                .unwrap()
-                .value()
-                .unwrap(),
-            a_native * &one_native
-        );
+        assert_eq!((&a * &one).value()?, a_native * &one_native);
 
         // a * b = b * a
-        let ab = a.mul(cs.ns(|| "a_times_b"), &b).unwrap();
-        let ba = b.mul(cs.ns(|| "b_times_a"), &a).unwrap();
-        assert_eq!(ab, ba);
-        assert_eq!(ab.value().unwrap(), a_native * &b_native);
+        let ab = &a * &b;
+        let ba = &b * &a;
+        assert_eq!(ab.value()?, ba.value()?);
+        assert_eq!(ab.value()?, a_native * &b_native);
 
-        let ab_const = a.mul(cs.ns(|| "a_times_b_const"), &b_const).unwrap();
-        let b_const_a = b_const.mul(cs.ns(|| "b_const_times_a"), &a).unwrap();
-        assert_eq!(ab_const, b_const_a);
-        assert_eq!(ab_const, ab);
-        assert_eq!(ab_const.value().unwrap(), a_native * &b_native);
+        let ab_const = &a * &b_const;
+        let b_const_a = &b_const * &a;
+        assert_eq!(ab_const.value()?, b_const_a.value()?);
+        assert_eq!(ab_const.value()?, ab.value()?);
+        assert_eq!(ab_const.value()?, a_native * &b_native);
 
         // (a * b) * a = a * (b * a)
-        let ab_a = ab.mul(cs.ns(|| "ab_times_a"), &a).unwrap();
-        let a_ba = a.mul(cs.ns(|| "a_times_ba"), &ba).unwrap();
-        assert_eq!(ab_a, a_ba);
-        assert_eq!(ab_a.value().unwrap(), a_native * &b_native * &a_native);
+        let ab_a = &ab * &a;
+        let a_ba = &a * &ba;
+        assert_eq!(ab_a.value()?, a_ba.value()?);
+        assert_eq!(ab_a.value()?, a_native * &b_native * &a_native);
 
-        let aa = a.mul(cs.ns(|| "a * a"), &a).unwrap();
-        let a_squared = a.square(cs.ns(|| "a^2")).unwrap();
-        a_squared
-            .enforce_equal(&mut cs.ns(|| "a^2 == a*a"), &aa)
-            .unwrap();
-        assert_eq!(aa, a_squared);
-        assert_eq!(aa.value().unwrap(), a_native.square());
+        let aa = &a * &a;
+        let a_squared = a.square()?;
+        a_squared.enforce_equal(&aa)?;
+        assert_eq!(aa.value()?, a_squared.value()?);
+        assert_eq!(aa.value()?, a_native.square());
 
-        let aa = a
-            .mul_by_constant(cs.ns(|| "a * a via mul_by_const"), &a.value().unwrap())
-            .unwrap();
-        a_squared
-            .enforce_equal(&mut cs.ns(|| "a^2 == a*a via mul_by_const"), &aa)
-            .unwrap();
-        assert_eq!(aa, a_squared);
-        assert_eq!(aa.value().unwrap(), a_native.square());
+        let aa = &a * a.value()?;
+        a_squared.enforce_equal(&aa)?;
+        assert_eq!(aa.value()?, a_squared.value()?);
+        assert_eq!(aa.value()?, a_native.square());
 
-        let a_b2 = a
-            .add_constant(cs.ns(|| "a + b via add_const"), &b.value().unwrap())
-            .unwrap();
-        a_b.enforce_equal(&mut cs.ns(|| "a + b == a + b via add_const"), &a_b2)
-            .unwrap();
-        assert_eq!(a_b, a_b2);
+        let a_b2 = &a + b_native;
+        a_b.enforce_equal(&a_b2)?;
+        assert_eq!(a_b.value()?, a_b2.value()?);
 
-        let a_inv = a.inverse(cs.ns(|| "a_inv")).unwrap();
-        a_inv
-            .mul_equals(cs.ns(|| "check a_inv * a = 1"), &a, &one)
-            .unwrap();
-        assert_eq!(
-            a_inv.value().unwrap(),
-            a.value().unwrap().inverse().unwrap()
-        );
-        assert_eq!(a_inv.value().unwrap(), a_native.inverse().unwrap());
+        let a_inv = a.inverse()?;
+        a_inv.mul_equals(&a, &one)?;
+        assert_eq!(a_inv.value()?, a.value()?.inverse().unwrap());
+        assert_eq!(a_inv.value()?, a_native.inverse().unwrap());
 
-        let a_b_inv = a.mul_by_inverse(cs.ns(|| "a_b_inv"), &b).unwrap();
-        a_b_inv
-            .mul_equals(cs.ns(|| "check a_b_inv * b = a"), &b, &a)
-            .unwrap();
-        assert_eq!(
-            a_b_inv.value().unwrap(),
-            a_native * b_native.inverse().unwrap()
-        );
+        let a_b_inv = a.mul_by_inverse(&b)?;
+        a_b_inv.mul_equals(&b, &a)?;
+        assert_eq!(a_b_inv.value()?, a_native * b_native.inverse().unwrap());
 
         // a * a * a = a^3
         let bits = BitIterator::new([0x3])
             .map(Boolean::constant)
             .collect::<Vec<_>>();
-        assert_eq!(
-            a_native * &(a_native * &a_native),
-            a.pow(cs.ns(|| "test_pow"), &bits).unwrap().value().unwrap()
-        );
+        assert_eq!(a_native.pow([0x3]), a.pow(&bits)?.value()?);
 
         // a * a * a = a^3
-        assert_eq!(
-            a_native * &(a_native * &a_native),
-            a.pow_by_constant(cs.ns(|| "test_constant_pow"), &[3])
-                .unwrap()
-                .value()
-                .unwrap()
-        );
+        assert_eq!(a_native.pow([0x3]), a.pow_by_constant(&[3])?.value()?);
 
         // a * a * a = a^3
-        let mut constants = [FE::zero(); 4];
+        let mut constants = [F::zero(); 4];
         for c in &mut constants {
             *c = UniformRand::rand(&mut test_rng());
-            println!("Current c[i]: {:?}", c);
         }
-        let bits = [Boolean::constant(false), Boolean::constant(true)];
-        let lookup_result =
-            F::two_bit_lookup(cs.ns(|| "Lookup"), &bits, constants.as_ref()).unwrap();
-        assert_eq!(lookup_result.value().unwrap(), constants[2]);
+        let bits = [
+            Boolean::<AF::ConstraintF>::constant(false),
+            Boolean::constant(true),
+        ];
+        let lookup_result: FV<F, AF> = FV::two_bit_lookup(&bits, constants.as_ref())?;
+        assert_eq!(lookup_result.value()?, constants[2]);
 
-        let negone: FE = UniformRand::rand(&mut test_rng());
+        let negone: F = UniformRand::rand(&mut test_rng());
 
-        let n = F::alloc(&mut cs.ns(|| "alloc new var"), || Ok(negone)).unwrap();
-        let _ = n.to_bytes(&mut cs.ns(|| "ToBytes")).unwrap();
-        let _ = n
-            .to_non_unique_bytes(&mut cs.ns(|| "ToBytes Strict"))
-            .unwrap();
+        let n = FV::<F, AF>::new_witness(cs.ns("alloc new var"), || Ok(negone)).unwrap();
+        let _ = n.to_bytes()?;
+        let _ = n.to_non_unique_bytes()?;
 
-        let ab_false = a
-            .conditionally_add_constant(
-                cs.ns(|| "Add bool with coeff false"),
-                &Boolean::constant(false),
-                b_native,
-            )
-            .unwrap();
-        assert_eq!(ab_false.value().unwrap(), a_native);
-        let ab_true = a
-            .conditionally_add_constant(
-                cs.ns(|| "Add bool with coeff true"),
-                &Boolean::constant(true),
-                b_native,
-            )
-            .unwrap();
-        assert_eq!(ab_true.value().unwrap(), a_native + &b_native);
+        let ab_false = &a + (FV::from(Boolean::Constant(false)) * b_native);
+        assert_eq!(ab_false.value()?, a_native);
+        let ab_true = &a + (FV::from(Boolean::Constant(true)) * b_native);
+        assert_eq!(ab_true.value()?, a_native + &b_native);
 
-        if !cs.is_satisfied() {
+        if !cs.is_satisfied().unwrap() {
             println!("{:?}", cs.which_is_unsatisfied().unwrap());
         }
-        assert!(cs.is_satisfied());
+        assert!(cs.is_satisfied().unwrap());
+        Ok(())
     }
 
     #[allow(dead_code)]
-    pub(crate) fn frobenius_tests<
-        FE: Field,
-        ConstraintF: Field,
-        F: FieldGadget<FE, ConstraintF>,
-    >(
+    pub(crate) fn frobenius_tests<F: Field, AF: AllocatedField<F>>(
         maxpower: usize,
-    ) {
-        let mut cs = TestConstraintSystem::<ConstraintF>::new();
+    ) -> Result<(), SynthesisError> {
+        let cs = ConstraintSystem::<AF::ConstraintF>::new_ref();
         let mut rng = XorShiftRng::seed_from_u64(1231275789u64);
         for i in 0..=maxpower {
-            let mut a = FE::rand(&mut rng);
-            let mut a_gadget = F::alloc(cs.ns(|| format!("a_gadget_{:?}", i)), || Ok(a)).unwrap();
-            a_gadget = a_gadget
-                .frobenius_map(cs.ns(|| format!("frob_map_{}", i)), i)
-                .unwrap();
+            let mut a = F::rand(&mut rng);
+            let mut a_gadget = AF::new_witness(cs.ns(format!("a_gadget_{:?}", i)), || Ok(a))?;
+            a_gadget.frobenius_map_in_place(i)?;
             a.frobenius_map(i);
 
-            assert_eq!(a_gadget.value().unwrap(), a);
+            assert_eq!(a_gadget.value()?, a);
         }
 
-        assert!(cs.is_satisfied());
+        assert!(cs.is_satisfied().unwrap());
+        Ok(())
     }
 }
