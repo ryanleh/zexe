@@ -1,15 +1,14 @@
-use crate::fields::{cubic_extension::*, fp2::AllocatedFp2};
+use crate::fields::{cubic_extension::*, fp2::*};
 use algebra::fields::{fp6_3over2::*, CubicExtParameters, Fp2};
 use core::ops::MulAssign;
 use r1cs_core::SynthesisError;
 
-pub type AllocatedFp6<P> =
-    AllocatedCubicExt<AllocatedFp2<<P as Fp6Parameters>::Fp2Params>, Fp6ParamsWrapper<P>>;
+pub type Fp6Var<P> = CubicExtVar<Fp2Var<<P as Fp6Parameters>::Fp2Params>, Fp6ParamsWrapper<P>>;
 
-impl<P: Fp6Parameters> AllocatedCubicExtParams<AllocatedFp2<P::Fp2Params>> for Fp6ParamsWrapper<P> {
+impl<P: Fp6Parameters> CubicExtVarParams<Fp2Var<P::Fp2Params>> for Fp6ParamsWrapper<P> {
     fn mul_base_field_vars_by_frob_coeff(
-        c1: &mut AllocatedFp2<P::Fp2Params>,
-        c2: &mut AllocatedFp2<P::Fp2Params>,
+        c1: &mut Fp2Var<P::Fp2Params>,
+        c2: &mut Fp2Var<P::Fp2Params>,
         power: usize,
     ) {
         *c1 *= Self::FROBENIUS_COEFF_C1[power % Self::DEGREE_OVER_BASE_PRIME_FIELD];
@@ -17,8 +16,8 @@ impl<P: Fp6Parameters> AllocatedCubicExtParams<AllocatedFp2<P::Fp2Params>> for F
     }
 }
 
-impl<P: Fp6Parameters> AllocatedFp6<P> {
-    pub fn mul_by_0_c1_0(&self, c1: &AllocatedFp2<P::Fp2Params>) -> Result<Self, SynthesisError> {
+impl<P: Fp6Parameters> Fp6Var<P> {
+    pub fn mul_by_0_c1_0(&self, c1: &Fp2Var<P::Fp2Params>) -> Result<Self, SynthesisError> {
         // Karatsuba multiplication
         // v0 = a0 * b0 = 0
 
@@ -48,8 +47,8 @@ impl<P: Fp6Parameters> AllocatedFp6<P> {
     // #[inline]
     pub fn mul_by_c0_c1_0(
         &self,
-        c0: &AllocatedFp2<P::Fp2Params>,
-        c1: &AllocatedFp2<P::Fp2Params>,
+        c0: &Fp2Var<P::Fp2Params>,
+        c1: &Fp2Var<P::Fp2Params>,
     ) -> Result<Self, SynthesisError> {
         let v0 = &self.c0 * c0;
         let v1 = &self.c1 * c1;
@@ -73,7 +72,7 @@ impl<P: Fp6Parameters> AllocatedFp6<P> {
     }
 }
 
-impl<P: Fp6Parameters> MulAssign<Fp2<P::Fp2Params>> for AllocatedFp6<P> {
+impl<P: Fp6Parameters> MulAssign<Fp2<P::Fp2Params>> for Fp6Var<P> {
     fn mul_assign(&mut self, other: Fp2<P::Fp2Params>) {
         self.c0 *= other;
         self.c1 *= other;

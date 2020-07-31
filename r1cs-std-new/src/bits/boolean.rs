@@ -476,36 +476,13 @@ impl<F: Field> AllocVar<bool, F> for Boolean<F> {
 
 impl<F: Field> EqGadget<F> for Boolean<F> {
     fn is_eq(&self, other: &Self) -> Result<Boolean<F>, SynthesisError> {
-        use Boolean::*;
-        match (self, other) {
-            // 1 == 1; 0 == 0
-            (Constant(true), Constant(true)) | (Constant(false), Constant(false)) => {
-                Ok(Constant(true))
-            }
-            // false != true
-            (Constant(_), Constant(_)) => Ok(Constant(false)),
-            (_, _) => {
-                let cs = self.cs().or(other.cs()).unwrap();
-                let is_equal =
-                    Self::new_witness(cs.clone(), || Ok(self.value()? == other.value()?))?;
-
-                let multiplier = cs.new_witness_variable(|| {
-                    if is_equal.value()? {
-                        let diff =
-                            bool_to_field::<F>(self.value()?) - bool_to_field::<F>(other.value()?);
-                        diff.inverse().ok_or(SynthesisError::AssignmentMissing)
-                    } else {
-                        Ok(F::zero())
-                    }
-                })?;
-                cs.enforce_constraint(
-                    lc!() + self.lc() - other.lc(),
-                    lc!() + multiplier,
-                    is_equal.lc(),
-                )?;
-                Ok(is_equal)
-            }
-        }
+        // self | other | XNOR(self, other) | self == other
+        // -----|-------|-------------------|--------------
+        //   0  |   0   |         1         |      1
+        //   0  |   1   |         0         |      0
+        //   1  |   0   |         0         |      0
+        //   1  |   1   |         1         |      1
+        Ok(self.xor(other)?.not())
     }
 
     fn conditional_enforce_equal(

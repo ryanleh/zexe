@@ -1,35 +1,41 @@
 use algebra::{
     fields::{Field, QuadExtField, QuadExtParameters},
-    One, Zero,
+    One,
 };
 use core::{borrow::Borrow, marker::PhantomData};
 use r1cs_core::{ConstraintSystemRef, SynthesisError};
 
-use crate::{fields::AllocatedField, prelude::*, Assignment, Vec};
+use crate::{
+    fields::{ArithOpsBounds, FieldVar},
+    prelude::*,
+    Assignment, Vec,
+};
 
 #[derive(Derivative)]
-#[derivative(
-    Debug(bound = "AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>"),
-    Clone(bound = "AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>")
-)]
+#[derivative(Debug(bound = "BF: core::fmt::Debug"), Clone(bound = "BF: Clone"))]
 #[must_use]
-pub struct AllocatedQuadExt<AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>> {
-    pub c0: AF,
-    pub c1: AF,
+pub struct QuadExtVar<BF: FieldVar<P::BaseField>, P: QuadExtVarParams<BF>>
+where
+    for<'a> &'a BF: ArithOpsBounds<'a, P::BaseField, BF>,
+{
+    pub c0: BF,
+    pub c1: BF,
     #[derivative(Debug = "ignore")]
     _params: PhantomData<P>,
 }
 
-pub trait AllocatedQuadExtParams<AF: AllocatedField<Self::BaseField>>: QuadExtParameters {
-    fn mul_base_field_var_by_frob_coeff(fe: &mut AF, power: usize);
+pub trait QuadExtVarParams<BF: FieldVar<Self::BaseField>>: QuadExtParameters
+where
+    for<'a> &'a BF: ArithOpsBounds<'a, Self::BaseField, BF>,
+{
+    fn mul_base_field_var_by_frob_coeff(fe: &mut BF, power: usize);
 }
 
-impl<AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>> AllocatedQuadExt<AF, P> {
-    pub(crate) fn one(cs: ConstraintSystemRef<AF::ConstraintF>) -> Result<Self, SynthesisError> {
-        Self::new_constant(cs, QuadExtField::one())
-    }
-
-    pub fn new(c0: AF, c1: AF) -> Self {
+impl<BF: FieldVar<P::BaseField>, P: QuadExtVarParams<BF>> QuadExtVar<BF, P>
+where
+    for<'a> &'a BF: ArithOpsBounds<'a, P::BaseField, BF>,
+{
+    pub fn new(c0: BF, c1: BF) -> Self {
         Self {
             c0,
             c1,
@@ -37,17 +43,17 @@ impl<AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>> AllocatedQ
         }
     }
 
-    /// Multiply a AF by quadratic nonresidue P::NONRESIDUE.
+    /// Multiply a BF by quadratic nonresidue P::NONRESIDUE.
     #[inline]
-    pub fn mul_base_field_by_nonresidue(fe: &AF) -> Result<AF, SynthesisError> {
-        fe.mul_constant(P::NONRESIDUE)
+    pub fn mul_base_field_by_nonresidue(fe: &BF) -> Result<BF, SynthesisError> {
+        Ok(fe * P::NONRESIDUE)
     }
 
     #[inline]
     pub fn mul_by_base_field_constant(&self, fe: P::BaseField) -> Self {
         let c0 = self.c0.clone() * fe;
         let c1 = self.c1.clone() * fe;
-        AllocatedQuadExt::new(c0, c1)
+        QuadExtVar::new(c0, c1)
     }
 
     #[inline]
@@ -65,11 +71,10 @@ impl<AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>> AllocatedQ
     #[inline]
     pub fn cyclotomic_exp(&self, exponent: impl AsRef<[u64]>) -> Result<Self, SynthesisError>
     where
-        Self: AllocatedField<QuadExtField<P>, ConstraintF = AF::ConstraintF>,
+        Self: FieldVar<QuadExtField<P>, ConstraintF = BF::ConstraintF>,
     {
         use algebra::biginteger::arithmetic::find_wnaf;
-        let cs = self.cs().unwrap();
-        let mut res = Self::one(cs)?;
+        let mut res = Self::one();
         let self_inverse = self.unitary_inverse()?;
 
         let mut found_nonzero = false;
@@ -95,44 +100,70 @@ impl<AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>> AllocatedQ
     }
 }
 
-impl<AF, P> R1CSVar<AF::ConstraintF> for AllocatedQuadExt<AF, P>
+impl<BF, P> R1CSVar<BF::ConstraintF> for QuadExtVar<BF, P>
 where
-    AF: AllocatedField<P::BaseField>,
-    P: AllocatedQuadExtParams<AF>,
+    BF: FieldVar<P::BaseField>,
+    for<'a> &'a BF: ArithOpsBounds<'a, P::BaseField, BF>,
+    P: QuadExtVarParams<BF>,
 {
-    fn cs(&self) -> Option<ConstraintSystemRef<AF::ConstraintF>> {
+    fn cs(&self) -> Option<ConstraintSystemRef<BF::ConstraintF>> {
         [&self.c0, &self.c1].cs()
     }
 }
 
-impl<AF, P> From<Boolean<AF::ConstraintF>> for AllocatedQuadExt<AF, P>
+impl<BF, P> From<Boolean<BF::ConstraintF>> for QuadExtVar<BF, P>
 where
-    AF: AllocatedField<P::BaseField>,
-    P: AllocatedQuadExtParams<AF>,
+    BF: FieldVar<P::BaseField>,
+    for<'a> &'a BF: ArithOpsBounds<'a, P::BaseField, BF>,
+    P: QuadExtVarParams<BF>,
 {
-    fn from(other: Boolean<AF::ConstraintF>) -> Self {
-        if let Some(cs) = other.cs() {
-            let c0 = AF::from(other);
-            let c1 = AF::new_constant(cs, P::BaseField::zero()).unwrap();
-            Self::new(c0, c1)
-        } else {
-            unreachable!("Cannot create a constant value")
-        }
+    fn from(other: Boolean<BF::ConstraintF>) -> Self {
+        let c0 = BF::from(other);
+        let c1 = BF::zero();
+        Self::new(c0, c1)
     }
 }
 
-impl<AF, P> AllocatedField<QuadExtField<P>> for AllocatedQuadExt<AF, P>
+impl<'a, BF, P> ArithOpsBounds<'a, QuadExtField<P>, QuadExtVar<BF, P>> for QuadExtVar<BF, P>
 where
-    AF: AllocatedField<P::BaseField>,
-    for<'b> &'b AF: core::ops::Add<&'b AF, Output = AF>,
-    for<'b> &'b AF: core::ops::Sub<&'b AF, Output = AF>,
-    for<'b> &'b AF: core::ops::Mul<&'b AF, Output = AF>,
-    for<'b> &'b AF: core::ops::Add<P::BaseField, Output = AF>,
-    for<'b> &'b AF: core::ops::Sub<P::BaseField, Output = AF>,
-    for<'b> &'b AF: core::ops::Mul<P::BaseField, Output = AF>,
-    P: AllocatedQuadExtParams<AF>,
+    BF: FieldVar<P::BaseField>,
+    for<'b> &'b BF: ArithOpsBounds<'b, P::BaseField, BF>,
+    P: QuadExtVarParams<BF>,
 {
-    type ConstraintF = AF::ConstraintF;
+}
+impl<'a, BF, P> ArithOpsBounds<'a, QuadExtField<P>, QuadExtVar<BF, P>> for &'a QuadExtVar<BF, P>
+where
+    BF: FieldVar<P::BaseField>,
+    for<'b> &'b BF: ArithOpsBounds<'b, P::BaseField, BF>,
+    P: QuadExtVarParams<BF>,
+{
+}
+
+impl<BF, P> FieldVar<QuadExtField<P>> for QuadExtVar<BF, P>
+where
+    BF: FieldVar<P::BaseField>,
+    for<'a> &'a BF: ArithOpsBounds<'a, P::BaseField, BF>,
+    P: QuadExtVarParams<BF>,
+{
+    type ConstraintF = BF::ConstraintF;
+
+    fn constant(other: QuadExtField<P>) -> Self {
+        let c0 = BF::constant(other.c0);
+        let c1 = BF::constant(other.c1);
+        Self::new(c0, c1)
+    }
+
+    fn zero() -> Self {
+        let c0 = BF::zero();
+        let c1 = BF::zero();
+        Self::new(c0, c1)
+    }
+
+    fn one() -> Self {
+        let c0 = BF::one();
+        let c1 = BF::zero();
+        Self::new(c0, c1)
+    }
 
     #[inline]
     fn value(&self) -> Result<QuadExtField<P>, SynthesisError> {
@@ -232,63 +263,49 @@ where
 }
 
 impl_bounded_ops!(
-    AllocatedQuadExt<AF, P>,
+    QuadExtVar<BF, P>,
     QuadExtField<P>,
     Add,
     add,
     AddAssign,
     add_assign,
-    |this: &'a AllocatedQuadExt<AF, P>, other: &'a AllocatedQuadExt<AF, P>| {
+    |this: &'a QuadExtVar<BF, P>, other: &'a QuadExtVar<BF, P>| {
         let c0 = &this.c0 + &other.c0;
         let c1 = &this.c1 + &other.c1;
-        AllocatedQuadExt::new(c0, c1)
+        QuadExtVar::new(c0, c1)
     },
-    |this: &'a AllocatedQuadExt<AF, P>, other: QuadExtField<P>| {
-        let c0 = &this.c0 + other.c0;
-        let c1 = &this.c1 + other.c1;
-        AllocatedQuadExt::new(c0, c1)
+    |this: &'a QuadExtVar<BF, P>, other: QuadExtField<P>| {
+        this + QuadExtVar::constant(other)
     },
-    (AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>),
-    for<'b> &'b AF: core::ops::Add<&'b AF, Output = AF>,
-    for<'b> &'b AF: core::ops::Sub<&'b AF, Output = AF>,
-    for<'b> &'b AF: core::ops::Mul<&'b AF, Output = AF>,
-    for<'b> &'b AF: core::ops::Add<P::BaseField, Output = AF>,
-    for<'b> &'b AF: core::ops::Sub<P::BaseField, Output = AF>,
-    for<'b> &'b AF: core::ops::Mul<P::BaseField, Output = AF>,
+    (BF: FieldVar<P::BaseField>, P: QuadExtVarParams<BF>),
+    for <'b> &'b BF: ArithOpsBounds<'b, P::BaseField, BF>
 );
 impl_bounded_ops!(
-    AllocatedQuadExt<AF, P>,
+    QuadExtVar<BF, P>,
     QuadExtField<P>,
     Sub,
     sub,
     SubAssign,
     sub_assign,
-    |this: &'a AllocatedQuadExt<AF, P>, other: &'a AllocatedQuadExt<AF, P>| {
+    |this: &'a QuadExtVar<BF, P>, other: &'a QuadExtVar<BF, P>| {
         let c0 = &this.c0 - &other.c0;
         let c1 = &this.c1 - &other.c1;
-        AllocatedQuadExt::new(c0, c1)
+        QuadExtVar::new(c0, c1)
     },
-    |this: &'a AllocatedQuadExt<AF, P>, other: QuadExtField<P>| {
-        let c0 = &this.c0 - other.c0;
-        let c1 = &this.c1 - other.c1;
-        AllocatedQuadExt::new(c0, c1)
+    |this: &'a QuadExtVar<BF, P>, other: QuadExtField<P>| {
+        this - QuadExtVar::constant(other)
     },
-    (AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>),
-    for<'b> &'b AF: core::ops::Add<&'b AF, Output = AF>,
-    for<'b> &'b AF: core::ops::Sub<&'b AF, Output = AF>,
-    for<'b> &'b AF: core::ops::Mul<&'b AF, Output = AF>,
-    for<'b> &'b AF: core::ops::Add<P::BaseField, Output = AF>,
-    for<'b> &'b AF: core::ops::Sub<P::BaseField, Output = AF>,
-    for<'b> &'b AF: core::ops::Mul<P::BaseField, Output = AF>,
+    (BF: FieldVar<P::BaseField>, P: QuadExtVarParams<BF>),
+    for <'b> &'b BF: ArithOpsBounds<'b, P::BaseField, BF>
 );
 impl_bounded_ops!(
-    AllocatedQuadExt<AF, P>,
+    QuadExtVar<BF, P>,
     QuadExtField<P>,
     Mul,
     mul,
     MulAssign,
     mul_assign,
-    |this: &'a AllocatedQuadExt<AF, P>, other: &'a AllocatedQuadExt<AF, P>| {
+    |this: &'a QuadExtVar<BF, P>, other: &'a QuadExtVar<BF, P>| {
         // Karatsuba multiplication for Fp2:
         //     v0 = A.c0 * B.c0
         //     v1 = A.c1 * B.c1
@@ -309,40 +326,23 @@ impl_bounded_ops!(
         result.c1 *= &other.c0 + &other.c1;
         result.c1 -= &v0;
         result.c1 -= &v1;
-        result.c0 = v0 + &AllocatedQuadExt::<AF, P>::mul_base_field_by_nonresidue(&v1).unwrap();
+        result.c0 = v0 + &QuadExtVar::<BF, P>::mul_base_field_by_nonresidue(&v1).unwrap();
         result
     },
-    |this: &'a AllocatedQuadExt<AF, P>, other: QuadExtField<P>| {
-        // Karatsuba multiplication (see mul above).
-        // Doesn't need any constraints; returns linear combinations of
-        // `this`'s variables.
-        //
-        // (The operations below are guaranteed to return linear combinations)
-        let (a0, a1) = (&this.c0, &this.c1);
-        let (b0, b1) = (other.c0, other.c1);
-        let mut v0 = a0 * b0;
-        let beta_v1 = a1 * (b1 * &P::NONRESIDUE);
-
-        v0 += &beta_v1;
-        let c0 = v0;
-        let c1 = (a0 * b1) + &(a1 * b0);
-        AllocatedQuadExt::new(c0, c1)
+    |this: &'a QuadExtVar<BF, P>, other: QuadExtField<P>| {
+        this * QuadExtVar::constant(other)
     },
-    (AF: AllocatedField<P::BaseField>, P: AllocatedQuadExtParams<AF>),
-    for<'b> &'b AF: core::ops::Add<&'b AF, Output = AF>,
-    for<'b> &'b AF: core::ops::Sub<&'b AF, Output = AF>,
-    for<'b> &'b AF: core::ops::Mul<&'b AF, Output = AF>,
-    for<'b> &'b AF: core::ops::Add<P::BaseField, Output = AF>,
-    for<'b> &'b AF: core::ops::Sub<P::BaseField, Output = AF>,
-    for<'b> &'b AF: core::ops::Mul<P::BaseField, Output = AF>,
+    (BF: FieldVar<P::BaseField>, P: QuadExtVarParams<BF>),
+    for <'b> &'b BF: ArithOpsBounds<'b, P::BaseField, BF>
 );
 
-impl<AF, P> EqGadget<AF::ConstraintF> for AllocatedQuadExt<AF, P>
+impl<BF, P> EqGadget<BF::ConstraintF> for QuadExtVar<BF, P>
 where
-    AF: AllocatedField<P::BaseField>,
-    P: AllocatedQuadExtParams<AF>,
+    BF: FieldVar<P::BaseField>,
+    for<'b> &'b BF: ArithOpsBounds<'b, P::BaseField, BF>,
+    P: QuadExtVarParams<BF>,
 {
-    fn is_eq(&self, other: &Self) -> Result<Boolean<AF::ConstraintF>, SynthesisError> {
+    fn is_eq(&self, other: &Self) -> Result<Boolean<BF::ConstraintF>, SynthesisError> {
         let b0 = self.c0.is_eq(&other.c0)?;
         let b1 = self.c1.is_eq(&other.c1)?;
         b0.and(&b1)
@@ -352,7 +352,7 @@ where
     fn conditional_enforce_equal(
         &self,
         other: &Self,
-        condition: &Boolean<AF::ConstraintF>,
+        condition: &Boolean<BF::ConstraintF>,
     ) -> Result<(), SynthesisError> {
         self.c0.conditional_enforce_equal(&other.c0, condition)?;
         self.c1.conditional_enforce_equal(&other.c1, condition)?;
@@ -363,7 +363,7 @@ where
     fn conditional_enforce_not_equal(
         &self,
         other: &Self,
-        condition: &Boolean<AF::ConstraintF>,
+        condition: &Boolean<BF::ConstraintF>,
     ) -> Result<(), SynthesisError> {
         let is_equal = self.is_eq(other)?;
         is_equal
@@ -372,19 +372,20 @@ where
     }
 }
 
-impl<AF, P> ToBitsGadget<AF::ConstraintF> for AllocatedQuadExt<AF, P>
+impl<BF, P> ToBitsGadget<BF::ConstraintF> for QuadExtVar<BF, P>
 where
-    AF: AllocatedField<P::BaseField>,
-    P: AllocatedQuadExtParams<AF>,
+    BF: FieldVar<P::BaseField>,
+    for<'b> &'b BF: ArithOpsBounds<'b, P::BaseField, BF>,
+    P: QuadExtVarParams<BF>,
 {
-    fn to_bits(&self) -> Result<Vec<Boolean<AF::ConstraintF>>, SynthesisError> {
+    fn to_bits(&self) -> Result<Vec<Boolean<BF::ConstraintF>>, SynthesisError> {
         let mut c0 = self.c0.to_bits()?;
         let mut c1 = self.c1.to_bits()?;
         c0.append(&mut c1);
         Ok(c0)
     }
 
-    fn to_non_unique_bits(&self) -> Result<Vec<Boolean<AF::ConstraintF>>, SynthesisError> {
+    fn to_non_unique_bits(&self) -> Result<Vec<Boolean<BF::ConstraintF>>, SynthesisError> {
         let mut c0 = self.c0.to_non_unique_bits()?;
         let mut c1 = self.c1.to_non_unique_bits()?;
         c0.append(&mut c1);
@@ -392,19 +393,20 @@ where
     }
 }
 
-impl<AF, P> ToBytesGadget<AF::ConstraintF> for AllocatedQuadExt<AF, P>
+impl<BF, P> ToBytesGadget<BF::ConstraintF> for QuadExtVar<BF, P>
 where
-    AF: AllocatedField<P::BaseField>,
-    P: AllocatedQuadExtParams<AF>,
+    BF: FieldVar<P::BaseField>,
+    for<'b> &'b BF: ArithOpsBounds<'b, P::BaseField, BF>,
+    P: QuadExtVarParams<BF>,
 {
-    fn to_bytes(&self) -> Result<Vec<UInt8<AF::ConstraintF>>, SynthesisError> {
+    fn to_bytes(&self) -> Result<Vec<UInt8<BF::ConstraintF>>, SynthesisError> {
         let mut c0 = self.c0.to_bytes()?;
         let mut c1 = self.c1.to_bytes()?;
         c0.append(&mut c1);
         Ok(c0)
     }
 
-    fn to_non_unique_bytes(&self) -> Result<Vec<UInt8<AF::ConstraintF>>, SynthesisError> {
+    fn to_non_unique_bytes(&self) -> Result<Vec<UInt8<BF::ConstraintF>>, SynthesisError> {
         let mut c0 = self.c0.to_non_unique_bytes()?;
         let mut c1 = self.c1.to_non_unique_bytes()?;
         c0.append(&mut c1);
@@ -412,77 +414,81 @@ where
     }
 }
 
-impl<AF, P> CondSelectGadget<AF::ConstraintF> for AllocatedQuadExt<AF, P>
+impl<BF, P> CondSelectGadget<BF::ConstraintF> for QuadExtVar<BF, P>
 where
-    AF: AllocatedField<P::BaseField>,
-    P: AllocatedQuadExtParams<AF>,
+    BF: FieldVar<P::BaseField>,
+    for<'b> &'b BF: ArithOpsBounds<'b, P::BaseField, BF>,
+    P: QuadExtVarParams<BF>,
 {
     #[inline]
     fn conditionally_select(
-        cond: &Boolean<AF::ConstraintF>,
+        cond: &Boolean<BF::ConstraintF>,
         true_value: &Self,
         false_value: &Self,
     ) -> Result<Self, SynthesisError> {
-        let c0 = AF::conditionally_select(cond, &true_value.c0, &false_value.c0)?;
-        let c1 = AF::conditionally_select(cond, &true_value.c1, &false_value.c1)?;
+        let c0 = BF::conditionally_select(cond, &true_value.c0, &false_value.c0)?;
+        let c1 = BF::conditionally_select(cond, &true_value.c1, &false_value.c1)?;
         Ok(Self::new(c0, c1))
     }
 }
 
-impl<AF, P> TwoBitLookupGadget<AF::ConstraintF> for AllocatedQuadExt<AF, P>
+impl<BF, P> TwoBitLookupGadget<BF::ConstraintF> for QuadExtVar<BF, P>
 where
-    AF: AllocatedField<P::BaseField>
+    BF: FieldVar<P::BaseField>
         + TwoBitLookupGadget<
-            <AF as AllocatedField<P::BaseField>>::ConstraintF,
+            <BF as FieldVar<P::BaseField>>::ConstraintF,
             TableConstant = P::BaseField,
         >,
-    P: AllocatedQuadExtParams<AF>,
+    for<'b> &'b BF: ArithOpsBounds<'b, P::BaseField, BF>,
+    P: QuadExtVarParams<BF>,
 {
     type TableConstant = QuadExtField<P>;
 
     fn two_bit_lookup(
-        b: &[Boolean<AF::ConstraintF>],
+        b: &[Boolean<BF::ConstraintF>],
         c: &[Self::TableConstant],
     ) -> Result<Self, SynthesisError> {
         let c0s = c.iter().map(|f| f.c0).collect::<Vec<_>>();
         let c1s = c.iter().map(|f| f.c1).collect::<Vec<_>>();
-        let c0 = AF::two_bit_lookup(b, &c0s)?;
-        let c1 = AF::two_bit_lookup(b, &c1s)?;
+        let c0 = BF::two_bit_lookup(b, &c0s)?;
+        let c1 = BF::two_bit_lookup(b, &c1s)?;
         Ok(Self::new(c0, c1))
     }
 }
 
-impl<AF, P> ThreeBitCondNegLookupGadget<AF::ConstraintF> for AllocatedQuadExt<AF, P>
+impl<BF, P> ThreeBitCondNegLookupGadget<BF::ConstraintF> for QuadExtVar<BF, P>
 where
-    AF: AllocatedField<P::BaseField>
+    BF: FieldVar<P::BaseField>
         + ThreeBitCondNegLookupGadget<
-            <AF as AllocatedField<P::BaseField>>::ConstraintF,
+            <BF as FieldVar<P::BaseField>>::ConstraintF,
             TableConstant = P::BaseField,
         >,
-    P: AllocatedQuadExtParams<AF>,
+    for<'b> &'b BF: ArithOpsBounds<'b, P::BaseField, BF>,
+    P: QuadExtVarParams<BF>,
 {
     type TableConstant = QuadExtField<P>;
 
     fn three_bit_cond_neg_lookup(
-        b: &[Boolean<AF::ConstraintF>],
-        b0b1: &Boolean<AF::ConstraintF>,
+        b: &[Boolean<BF::ConstraintF>],
+        b0b1: &Boolean<BF::ConstraintF>,
         c: &[Self::TableConstant],
     ) -> Result<Self, SynthesisError> {
         let c0s = c.iter().map(|f| f.c0).collect::<Vec<_>>();
         let c1s = c.iter().map(|f| f.c1).collect::<Vec<_>>();
-        let c0 = AF::three_bit_cond_neg_lookup(b, b0b1, &c0s)?;
-        let c1 = AF::three_bit_cond_neg_lookup(b, b0b1, &c1s)?;
+        let c0 = BF::three_bit_cond_neg_lookup(b, b0b1, &c0s)?;
+        let c1 = BF::three_bit_cond_neg_lookup(b, b0b1, &c1s)?;
         Ok(Self::new(c0, c1))
     }
 }
 
-impl<AF, P> AllocVar<QuadExtField<P>, AF::ConstraintF> for AllocatedQuadExt<AF, P>
+impl<BF, P> AllocVar<QuadExtField<P>, BF::ConstraintF> for QuadExtVar<BF, P>
 where
-    AF: AllocatedField<P::BaseField>,
-    P: AllocatedQuadExtParams<AF>,
+    BF: FieldVar<P::BaseField>,
+    for<'b> &'b BF: ArithOpsBounds<'b, P::BaseField, BF>,
+    P: QuadExtVarParams<BF>,
 {
     fn new_variable<T: Borrow<QuadExtField<P>>>(
-        cs: ConstraintSystemRef<AF::ConstraintF>,
+        cs: ConstraintSystemRef<BF::ConstraintF>,
         f: impl FnOnce() -> Result<T, SynthesisError>,
         mode: AllocationMode,
     ) -> Result<Self, SynthesisError> {
@@ -494,8 +500,8 @@ where
             ),
         };
 
-        let c0 = AF::new_variable(cs.clone(), || c0, mode)?;
-        let c1 = AF::new_variable(cs.clone(), || c1, mode)?;
+        let c0 = BF::new_variable(cs.clone(), || c0, mode)?;
+        let c1 = BF::new_variable(cs.clone(), || c1, mode)?;
         Ok(Self::new(c0, c1))
     }
 }

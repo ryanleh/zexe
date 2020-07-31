@@ -1,32 +1,26 @@
-use crate::fields::{
-    fp2::AllocatedFp2, fp6_3over2::AllocatedFp6, quadratic_extension::*, AllocatedField,
-};
-use crate::R1CSVar;
+use crate::fields::{fp2::Fp2Var, fp6_3over2::Fp6Var, quadratic_extension::*, FieldVar};
 use algebra::fields::{fp12_2over3over2::*, fp6_3over2::Fp6Parameters, Field, QuadExtParameters};
 use r1cs_core::SynthesisError;
 
-pub type AllocatedFp12<P> =
-    AllocatedQuadExt<AllocatedFp6<<P as Fp12Parameters>::Fp6Params>, Fp12ParamsWrapper<P>>;
+pub type Fp12Var<P> = QuadExtVar<Fp6Var<<P as Fp12Parameters>::Fp6Params>, Fp12ParamsWrapper<P>>;
 
 type Fp2Params<P> = <<P as Fp12Parameters>::Fp6Params as Fp6Parameters>::Fp2Params;
 
-impl<P: Fp12Parameters> AllocatedQuadExtParams<AllocatedFp6<P::Fp6Params>>
-    for Fp12ParamsWrapper<P>
-{
-    fn mul_base_field_var_by_frob_coeff(fe: &mut AllocatedFp6<P::Fp6Params>, power: usize) {
+impl<P: Fp12Parameters> QuadExtVarParams<Fp6Var<P::Fp6Params>> for Fp12ParamsWrapper<P> {
+    fn mul_base_field_var_by_frob_coeff(fe: &mut Fp6Var<P::Fp6Params>, power: usize) {
         fe.c0 *= Self::FROBENIUS_COEFF_C1[power % Self::DEGREE_OVER_BASE_PRIME_FIELD];
         fe.c1 *= Self::FROBENIUS_COEFF_C1[power % Self::DEGREE_OVER_BASE_PRIME_FIELD];
     }
 }
 
-impl<P: Fp12Parameters> AllocatedFp12<P> {
+impl<P: Fp12Parameters> Fp12Var<P> {
     /// Multiplies by an element of the form (c0 = (c0, c1, 0), c1 = (0, d1, 0))
     #[inline]
     pub fn mul_by_014(
         &self,
-        c0: &AllocatedFp2<Fp2Params<P>>,
-        c1: &AllocatedFp2<Fp2Params<P>>,
-        d1: &AllocatedFp2<Fp2Params<P>>,
+        c0: &Fp2Var<Fp2Params<P>>,
+        c1: &Fp2Var<Fp2Params<P>>,
+        d1: &Fp2Var<Fp2Params<P>>,
     ) -> Result<Self, SynthesisError> {
         let v0 = self.c0.mul_by_c0_c1_0(&c0, &c1)?;
         let v1 = self.c1.mul_by_0_c1_0(&d1)?;
@@ -40,14 +34,14 @@ impl<P: Fp12Parameters> AllocatedFp12<P> {
     #[inline]
     pub fn mul_by_034(
         &self,
-        c0: &AllocatedFp2<Fp2Params<P>>,
-        d0: &AllocatedFp2<Fp2Params<P>>,
-        d1: &AllocatedFp2<Fp2Params<P>>,
+        c0: &Fp2Var<Fp2Params<P>>,
+        d0: &Fp2Var<Fp2Params<P>>,
+        d1: &Fp2Var<Fp2Params<P>>,
     ) -> Result<Self, SynthesisError> {
         let a0 = &self.c0.c0 * c0;
         let a1 = &self.c0.c1 * c0;
         let a2 = &self.c0.c2 * c0;
-        let a = AllocatedFp6::new(a0, a1, a2);
+        let a = Fp6Var::new(a0, a1, a2);
         let b = self.c1.mul_by_c0_c1_0(&d0, &d1)?;
 
         let c0 = c0 + d0;
@@ -128,8 +122,8 @@ impl<P: Fp12Parameters> AllocatedFp12<P> {
 
             // z5 = 3 * t3 + 2 * z5
             let c1_c2 = (&t3 + z5).double()? + &t3;
-            let c0 = AllocatedFp6::new(c0_c0, c0_c1, c0_c2);
-            let c1 = AllocatedFp6::new(c1_c0, c1_c1, c1_c2);
+            let c0 = Fp6Var::new(c0_c0, c0_c1, c0_c2);
+            let c1 = Fp6Var::new(c1_c0, c1_c1, c1_c2);
 
             Ok(Self::new(c0, c1))
         } else {
@@ -143,8 +137,7 @@ impl<P: Fp12Parameters> AllocatedFp12<P> {
         exponent: impl AsRef<[u64]>,
     ) -> Result<Self, SynthesisError> {
         use algebra::biginteger::arithmetic::find_wnaf;
-        let cs = self.cs().unwrap();
-        let mut res = Self::one(cs)?;
+        let mut res = Self::one();
         let self_inverse = self.unitary_inverse()?;
 
         let mut found_nonzero = false;
